@@ -1,0 +1,38 @@
+# AI 求职 Agent — Python 后端与运行时依赖
+# 生成依据：docs/AI求职Agent技术栈与技术选型文档_V1.0.md
+# 安装命令：uv pip install -r requirements.txt
+# 更推荐：使用 `uv add <package>` 直接维护 pyproject.toml
+
+# ---------- Web 框架与 API ----------
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+python-multipart>=0.0.9
+email-validator>=2.1.0
+
+# ---------- Agent / LLM ----------
+langgraph>=0.1.0
+langchain>=0.2.0
+langchain-openai>=0.1.0
+httpx>=0.27.0
+
+# ---------- 数据库 ----------
+asyncpg>=0.29.0
+sqlalchemy[asyncio]>=2.0.0
+pgvector>=0.2.5
+alembic>=1.13.0
+
+# ---------- 缓存与队列 ----------
+redis>=5.0.0
+
+# ---------- 实时通信 ----------
+websockets>=12.0
+
+# ---------- 文件存储（MinIO 待确认） ----------
+minio>=7.2.0
+
+# ---------- 配置、日志、工具 ----------
+python-dotenv>=1.0.0
+structlog>=24.1.0
+aiofiles>=23.2.0

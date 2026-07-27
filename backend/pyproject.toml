@@ -1,0 +1,151 @@
+[project]
+name = "ai-job-agent-runtime"
+version = "0.1.0"
+description = "AI Job Agent Runtime"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # Web 框架与 API
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "python-multipart>=0.0.9",
+    "email-validator>=2.1.0",
+    # Agent / LLM
+    "langgraph>=0.1.0",
+    "langchain>=0.2.0",
+    "langchain-openai>=0.1.0",
+    "httpx>=0.27.0",
+    # 数据库
+    "asyncpg>=0.29.0",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "pgvector>=0.2.5",
+    "alembic>=1.13.0",
+    # 缓存与队列
+    "redis>=5.0.0",
+    # 实时通信
+    "websockets>=12.0",
+    # 文件存储（MinIO 待确认）
+    "minio>=7.2.0",
+    # 配置、日志、工具
+    "python-dotenv>=1.0.0",
+    "structlog>=24.1.0",
+    "aiofiles>=23.2.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+    "pre-commit>=4.0.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "types-aiofiles>=23.2.0",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+lint.select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "ANN",    # flake8-annotations
+    "S",      # flake8-bandit
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "DTZ",    # flake8-datetimez
+    "T10",    # flake8-debugger
+    "EM",     # flake8-errmsg
+    "ISC",    # flake8-implicit-str-concat
+    "ICN",    # flake8-import-conventions
+    "G",      # flake8-logging-format
+    "PIE",    # flake8-pie
+    "T20",    # flake8-print
+    "Q",      # flake8-quotes
+    "RSE",    # flake8-raise
+    "RET",    # flake8-return
+    "SIM",    # flake8-simplify
+    "TID",    # flake8-tidy-imports
+    "ARG",    # flake8-unused-arguments
+    "PTH",    # flake8-use-pathlib
+    "ERA",    # eradicate
+    "PL",     # pylint
+    "TRY",    # tryceratops
+    "FLY",    # flynt
+    "PERF",   # perflint
+    "FURB",   # refurb
+    "RUF",    # ruff-specific rules
+]
+lint.ignore = [
+    "S101",    # Use of assert detected
+    "TRY003",  # Avoid specifying long messages outside the exception class
+    "PLR0911", # Too many return statements
+    "PLR0912", # Too many branches
+    "PLR0913", # Too many arguments
+    "PLR0915", # Too many statements
+    "PLR2004", # Magic value used
+    "PERF203", # Try-except within for loop
+    "RUF001",  # 中文全角标点（字符串）故意保留
+    "RUF002",  # 中文全角标点（文档串）故意保留
+    "RUF003",  # 中文全角标点（注释）故意保留
+    "PLC0415", # 探测脚本内按需导入第三方客户端，便于隔离失败
+]
+lint.isort = { known-first-party = ["app"] }
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+show_error_codes = true
+show_error_context = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+# 第三方库缺类型时按需补充 stub 或在此放宽
+ignore_missing_imports = true
+exclude = [
+    "docs/.*",
+    "tests/.*",
+    "alembic/.*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --strict-markers --strict-config"
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+show_missing = true
+skip_covered = true
+fail_under = 80
