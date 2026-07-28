@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -21,7 +21,7 @@ settings = get_settings()
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     """应用生命周期。
 
     启动期：配置结构化日志。
