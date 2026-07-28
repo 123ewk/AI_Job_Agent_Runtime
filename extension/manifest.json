@@ -6,7 +6,9 @@
   "permissions": [
     "activeTab",
     "scripting",
-    "storage"
+    "storage",
+    "sidePanel",
+    "tabs"
   ],
   "host_permissions": [
     "*://*.zhipin.com/*",
