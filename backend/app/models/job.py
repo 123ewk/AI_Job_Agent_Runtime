@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -26,7 +27,8 @@ class Job(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"), index=True)
-    platform: Mapped[str] = mapped_column(String(30), nullable=False)
+    hr_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("hrs.id"))
+    platform: Mapped[str] = mapped_column(String(30), nullable=False, default="boss", server_default=text("'boss'"))
     external_id: Mapped[str] = mapped_column(String(100), nullable=False)
     title: Mapped[str | None] = mapped_column(String(300))
     company: Mapped[str | None] = mapped_column(String(200))
@@ -36,6 +38,13 @@ class Job(Base, TimestampMixin):
     requirements: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     score: Mapped[float | None] = mapped_column(Float)
     score_detail: Mapped[dict[str, object] | None] = mapped_column(JSONB)
-    # 状态：discovered / analyzed / applied / rejected
-    status: Mapped[str | None] = mapped_column(String(30))
+    # 状态：discovered / scored / chatting / applied / rejected / closed / skipped
+    # 与 doc 09 §5.4 / doc 05 对齐
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="discovered",
+        server_default=text("'discovered'"),
+    )
+    source_url: Mapped[str | None] = mapped_column(String(500))
     extra: Mapped[dict[str, object] | None] = mapped_column(JSONB)

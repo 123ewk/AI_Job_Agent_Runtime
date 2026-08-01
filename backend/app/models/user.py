@@ -25,8 +25,10 @@ class User(Base, TimestampMixin):
     password_hash: Mapped[str | None] = mapped_column(String(255))
     # 用户级 LLM 配置，覆盖全局默认
     llm_provider: Mapped[str | None] = mapped_column(String(50))
+    llm_base_url: Mapped[str | None] = mapped_column(String(500))
     llm_api_key_encrypted: Mapped[str | None] = mapped_column(String(500))
-    # 灵活设置项，避免频繁加列
+    llm_model: Mapped[str | None] = mapped_column(String(100))
+    # 灵活设置项，保留兼容；settings 表为权威入口，此处为缓存/兼容层
     settings: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )

@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -26,12 +27,19 @@ from app.db.base import Base
 
 class ExecutionLog(Base):
     __tablename__ = "execution_logs"
-    __table_args__ = (Index("ix_execution_logs_task_created", "task_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_execution_logs_task_created", "task_id", "created_at"),
+        Index("ix_execution_logs_trace_id", "trace_id"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     task_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("tasks.id"), nullable=False)
+    # 全链路追踪 ID（doc 15 可观测）
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default=text("''"))
     # LangGraph 节点名：job_analyze / response_planner / tool_executor 等
     node: Mapped[str | None] = mapped_column(String(100))
+    # Skill 名（区分 Skill 与底层 Tool，doc 09 §5.13）
+    skill: Mapped[str | None] = mapped_column(String(100))
     tool: Mapped[str | None] = mapped_column(String(100))
     input: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     output: Mapped[dict[str, object] | None] = mapped_column(JSONB)
