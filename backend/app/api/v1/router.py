@@ -8,7 +8,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import health
+from app.api.v1 import conversations, health, jobs, memory, settings, tasks, users
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
+api_router.include_router(users.router)
+api_router.include_router(settings.router)
+api_router.include_router(jobs.router)
+api_router.include_router(conversations.router)
+api_router.include_router(tasks.router)
+api_router.include_router(memory.router)

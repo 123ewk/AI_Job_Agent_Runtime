@@ -13,9 +13,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api.v1.router import api_router
+from app.api.ws import ws_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
-from app.db.base import engine
+from app.db.base import dispose_engine
 
 settings = get_settings()
 
@@ -37,7 +38,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     )
     yield
     logger.info("应用关闭，释放数据库连接池")
-    await engine.dispose()
+    await dispose_engine()
 
 
 def _build_cors_origins() -> list[str]:
@@ -79,6 +80,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(api_router)
+    app.include_router(ws_router)
 
     @app.get("/", tags=["root"])
     async def root() -> dict[str, str]:
