@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Generic, Literal, TypeVar
 
-from sqlalchemy import and_, delete, select, update
+from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import QueryableAttribute, selectinload
 from sqlalchemy.sql.selectable import Select
@@ -65,11 +65,15 @@ class BaseRepository(Generic[T]):
     async def create(self, data: dict[str, Any]) -> T:
         """创建记录。
 
-        注意：不自动 flush/commit，由 Service 层控制事务边界。
-        若需要立即获取自增 id，可手动 await session.flush()。
+        事务边界由 Service 层控制（@transactional），本方法只负责入 session 并 flush。
+        flush 而非 commit：把 INSERT 发到当前事务，使自增 id 与 server_default
+        （created_at / status 默认值等）立即回填到对象，调用方据此构造 Response；
+        真正的 commit 仍由外层 @transactional 在方法返回后执行。
         """
         obj = self.model(**data)
         self.session.add(obj)
+        # 触发 INSERT（RETURNING 回填自增主键与 server_default），保证调用方能读到 id 等字段
+        await self.session.flush()
         return obj
 
     async def update(self, id: int, data: dict[str, Any]) -> T | None:
@@ -101,7 +105,7 @@ class BaseRepository(Generic[T]):
 
     async def count(self) -> int:
         """总记录数（供前端分页展示）。"""
-        result = await self.session.execute(select(self.model.id).count())
+        result = await self.session.execute(select(func.count(self.model.id)))
         return result.scalar_one()
 
     async def paginate(
@@ -121,7 +125,7 @@ class BaseRepository(Generic[T]):
             else self.model.__table__.c[order_by].desc()
         )
         stmt = select(self.model).order_by(order_clause)
-        count_stmt = select(self.model.id).count()
+        count_stmt = select(func.count(self.model.id))
 
         total = (await self.session.execute(count_stmt)).scalar_one()
         if page >= 1:
@@ -194,12 +198,56 @@ class BaseRepository(Generic[T]):
         filters: dict[str, Any],
         order_by: str = "id",
         limit: int | None = None,
+        *,
+        skip: int = 0,
     ) -> list[T]:
         """按等值条件过滤列表（多条件 AND 关系）。"""
         clauses = [getattr(self.model, k) == v for k, v in filters.items()]
         order_clause = self.model.__table__.c[order_by].desc()  # type: ignore[index]
         stmt = select(self.model).where(and_(*clauses)).order_by(order_clause)
+        if skip > 0:
+            stmt = stmt.offset(skip)
         if limit is not None:
             stmt = stmt.limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def count_by_filter(self, filters: dict[str, Any]) -> int:
+        """按等值条件统计数量（多条件 AND 关系）。"""
+        clauses = [getattr(self.model, k) == v for k, v in filters.items()]
+        stmt = select(func.count(self.model.id)).where(and_(*clauses))
+        result = await self.session.execute(stmt)
+        count: int = result.scalar_one()
+        return count
+
+    async def list_by_filter_with_count(
+        self,
+        filters: dict[str, Any],
+        page: int = 1,
+        page_size: int = 20,
+        order_by: str = "id",
+    ) -> tuple[list[T], int]:
+        """按等值条件过滤并分页，同时返回总数。"""
+        clauses = [getattr(self.model, k) == v for k, v in filters.items()]
+        order_clause = self.model.__table__.c[order_by].desc()  # type: ignore[index]
+
+        count_stmt = select(func.count(self.model.id)).where(and_(*clauses))
+        total = (await self.session.execute(count_stmt)).scalar_one()
+
+        stmt = select(self.model).where(and_(*clauses)).order_by(order_clause)
+        if page >= 1:
+            stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+        items = (await self.session.execute(stmt)).scalars().all()
+
+        return list(items), total
+
+    async def get_for_update(self, id: int) -> T | None:
+        """按主键获取并加行锁（FOR UPDATE）。
+
+        用于需要原子更新状态的场景（如状态流转、库存扣减）。
+        注意：必须在事务内调用，否则锁立即释放。
+        """
+        result = await self.session.execute(
+            select(self.model).where(self.model.id == id).with_for_update()  # type: ignore[attr-defined]
+        )
+        return result.scalar_one_or_none()
