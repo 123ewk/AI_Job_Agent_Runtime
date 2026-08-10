@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ConflictError, NotFoundError
 from app.models.task import Task as TaskModel
 from app.repository.task import TaskRepository
 from app.repository.task_checkpoint_index import TaskCheckpointIndexRepository
@@ -48,8 +49,11 @@ def _get_queue_classes() -> tuple[Any, Any]:
     return _QueueClient, _QueueMessage
 
 
-class TaskStateError(ValueError):
-    """任务状态流转非法异常。"""
+class TaskStateError(ConflictError):
+    """任务状态流转非法异常（继承 ConflictError → 409）。
+
+    改为继承 ConflictError 后，状态机违规经全局 handler 返回 409 而非 500。
+    """
 
 
 class TaskService(BaseService):
@@ -160,7 +164,7 @@ class TaskService(BaseService):
         task = await self.task_repo.get(task_id)
         if task is None or task.user_id != user_id:
             msg = f"Task {task_id} not found"
-            raise ValueError(msg)
+            raise NotFoundError(msg)
         return self._to_response(task)
 
     async def list(
@@ -211,7 +215,7 @@ class TaskService(BaseService):
         task = await self.task_repo.get_for_update(task_id)
         if task is None or task.user_id != user_id:
             msg = f"Task {task_id} not found"
-            raise ValueError(msg)
+            raise NotFoundError(msg)
 
         current_status = TaskStatus(task.status)
 
@@ -256,7 +260,7 @@ class TaskService(BaseService):
         original_task = await self.task_repo.get(task_id)
         if original_task is None or original_task.user_id != user_id:
             msg = f"Task {task_id} not found"
-            raise ValueError(msg)
+            raise NotFoundError(msg)
 
         current_status = TaskStatus(original_task.status)
         if current_status != TaskStatus.FAILED:
@@ -327,7 +331,7 @@ class TaskService(BaseService):
         task = await self.task_repo.get_for_update(task_id)
         if task is None:
             msg = f"Task {task_id} not found"
-            raise ValueError(msg)
+            raise NotFoundError(msg)
 
         current_status = TaskStatus(task.status)
 

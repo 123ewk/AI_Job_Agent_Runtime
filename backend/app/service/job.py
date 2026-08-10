@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import NotFoundError
 from app.repository.hr import HRRepository
 from app.repository.job import JobRepository
 from app.schema.common import PaginatedResponse
@@ -66,7 +67,7 @@ class JobService(BaseService):
         """获取职位详情。"""
         job = await self.job_repo.get_by_unique(id=job_id, user_id=user_id)
         if not job:
-            raise ValueError(f"职位不存在: {job_id}")
+            raise NotFoundError(f"职位不存在: {job_id}")
         return JobResponse.model_validate(job, from_attributes=True)
 
     async def list(
@@ -94,7 +95,7 @@ class JobService(BaseService):
         """更新职位信息。"""
         job = await self.job_repo.get_by_unique(id=job_id, user_id=user_id)
         if not job:
-            raise ValueError(f"职位不存在: {job_id}")
+            raise NotFoundError(f"职位不存在: {job_id}")
 
         update_data = data.model_dump(exclude_unset=True)
         job = await self.job_repo.update(job_id, update_data)
@@ -110,7 +111,7 @@ class JobService(BaseService):
         """
         job = await self.job_repo.get_by_unique(id=job_id, user_id=user_id)
         if not job:
-            raise ValueError(f"职位不存在: {job_id}")
+            raise NotFoundError(f"职位不存在: {job_id}")
 
         await self.job_repo.delete(job_id)
         self.logger.info("job_deleted", extra={"user_id": user_id, "job_id": job_id})

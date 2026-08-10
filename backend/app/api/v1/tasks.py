@@ -11,6 +11,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from app.api.deps import CurrentUserDep, TaskServiceDep
+from app.core.exceptions import NotFoundError
 from app.core.logging import get_logger
 from app.schema.common import PaginatedResponse, StatusResponse
 from app.schema.task import (
@@ -150,7 +151,7 @@ async def approve_task(
     approval_repo = ApprovalRepository(service.db)
     approval = await approval_repo.get_latest_pending_by_task(task_id)
     if approval is None:
-        raise ValueError("任务没有待处理的审批")
+        raise NotFoundError("任务没有待处理的审批")
 
     approval_service = ApprovalService(service.db)
     await approval_service.approve(approval.id, data.decision_payload or {})
@@ -174,7 +175,7 @@ async def deny_task(
     approval_repo = ApprovalRepository(service.db)
     approval = await approval_repo.get_latest_pending_by_task(task_id)
     if approval is None:
-        raise ValueError("任务没有待处理的审批")
+        raise NotFoundError("任务没有待处理的审批")
 
     approval_service = ApprovalService(service.db)
     await approval_service.deny(approval.id)

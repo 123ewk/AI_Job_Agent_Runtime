@@ -18,6 +18,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 from app.models.approval import Approval as ApprovalModel
 from app.models.approval import ApprovalStatus
 from app.models.approval import ApprovalType as ModelApprovalType
@@ -31,8 +32,11 @@ from app.service.base import BaseService, transactional
 _active_timers: set[asyncio.Task[Any]] = set()
 
 
-class ApprovalStateError(ValueError):
-    """Approval 状态非法异常。"""
+class ApprovalStateError(ConflictError):
+    """Approval 状态非法异常（继承 ConflictError → 409）。
+
+    改为继承 ConflictError 后，状态机违规经全局 handler 返回 409 而非 500。
+    """
 
 
 class ApprovalService(BaseService):
@@ -151,10 +155,10 @@ class ApprovalService(BaseService):
         approval = await self.approval_repo.get_for_update(approval_id)
         if approval is None:
             msg = f"Approval {approval_id} not found"
-            raise ValueError(msg)
+            raise NotFoundError(msg)
         if approval.user_id != user_id:
             msg = f"Approval {approval_id} does not belong to user {user_id}"
-            raise ValueError(msg)
+            raise ForbiddenError(msg)
 
         current_status = ApprovalStatus(approval.status)
         if current_status != ApprovalStatus.PENDING:
@@ -203,10 +207,10 @@ class ApprovalService(BaseService):
         approval = await self.approval_repo.get_for_update(approval_id)
         if approval is None:
             msg = f"Approval {approval_id} not found"
-            raise ValueError(msg)
+            raise NotFoundError(msg)
         if approval.user_id != user_id:
             msg = f"Approval {approval_id} does not belong to user {user_id}"
-            raise ValueError(msg)
+            raise ForbiddenError(msg)
 
         current_status = ApprovalStatus(approval.status)
         if current_status != ApprovalStatus.PENDING:

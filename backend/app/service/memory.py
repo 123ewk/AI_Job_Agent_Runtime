@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ForbiddenError, NotFoundError
 from app.models.memory import Memory as MemoryModel
 from app.repository.memory import MemoryRepository
 from app.schema.memory import MemoryCreate, MemoryResponse, MemorySearchRequest
@@ -423,7 +424,8 @@ class MemoryService(BaseService):
             memory_id: 待删除记忆 ID
 
         Raises:
-            ValueError: 记忆不存在或不属于该用户
+            NotFoundError: 记忆不存在
+            ForbiddenError: 记忆不属于该用户
         """
         memory = await self.memory_repo.get(memory_id)
         if memory is None:
@@ -433,7 +435,7 @@ class MemoryService(BaseService):
                 user_id=user_id,
                 memory_id=memory_id,
             )
-            raise ValueError(msg)
+            raise NotFoundError(msg)
 
         if memory.user_id != user_id:
             msg = f"Memory {memory_id} does not belong to user {user_id}"
@@ -443,7 +445,7 @@ class MemoryService(BaseService):
                 memory_id=memory_id,
                 owner_id=memory.user_id,
             )
-            raise ValueError(msg)
+            raise ForbiddenError(msg)
 
         await self.memory_repo.delete(memory_id)
 

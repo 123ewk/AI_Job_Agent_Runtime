@@ -14,6 +14,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import BadRequestError
 from app.repository.setting import SettingRepository
 from app.schema.setting import (
     AgentConfigResponse,
@@ -263,7 +264,7 @@ class SettingsService(BaseService):
         触发 side effect：监听时间、最大聊天数等变更需联动 Scheduler。
         """
         if category not in CONFIG_DEFAULTS:
-            raise ValueError(f"不支持的配置分类: {category}")
+            raise BadRequestError(f"不支持的配置分类: {category}")
 
         updated_keys: list[str] = []
         for item in data.updates:

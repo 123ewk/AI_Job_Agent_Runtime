@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ConflictError, NotFoundError
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.repository.conversation import ConversationRepository
@@ -78,7 +79,7 @@ class ConversationService(BaseService):
                 "conversation_limit_exceeded",
                 extra={"user_id": user_id, "active_count": active_count, "limit": DEFAULT_MAX_CONCURRENT_CHATS},
             )
-            raise ValueError(error_msg)
+            raise ConflictError(error_msg)
 
         # 2. 检查同平台同外部 ID 是否已存在
         existing = await self.conversation_repo.get_by_platform_external(data.platform, data.external_id)
@@ -106,7 +107,7 @@ class ConversationService(BaseService):
         """获取会话详情。"""
         conv = await self.conversation_repo.get_by_unique(id=conversation_id, user_id=user_id)
         if not conv:
-            raise ValueError(f"会话不存在: {conversation_id}")
+            raise NotFoundError(f"会话不存在: {conversation_id}")
         return ConversationResponse.model_validate(conv, from_attributes=True)
 
     async def list_by_user(
@@ -134,7 +135,7 @@ class ConversationService(BaseService):
         """更新会话元数据（标签、备注等）。"""
         conv = await self.conversation_repo.get_by_unique(id=conversation_id, user_id=user_id)
         if not conv:
-            raise ValueError(f"会话不存在: {conversation_id}")
+            raise NotFoundError(f"会话不存在: {conversation_id}")
 
         update_data = data.model_dump(exclude_unset=True)
         await self.conversation_repo.update(conversation_id, update_data)
@@ -155,7 +156,7 @@ class ConversationService(BaseService):
         """
         conv = await self.conversation_repo.get_by_unique(id=conversation_id, user_id=user_id)
         if not conv:
-            raise ValueError(f"会话不存在: {conversation_id}")
+            raise NotFoundError(f"会话不存在: {conversation_id}")
 
         await self.conversation_repo.update(conversation_id, {"status": "closed"})
 
@@ -175,7 +176,7 @@ class ConversationService(BaseService):
         # 1. 校验会话归属
         conv = await self.conversation_repo.get_by_unique(id=conversation_id, user_id=user_id)
         if not conv:
-            raise ValueError(f"会话不存在: {conversation_id}")
+            raise NotFoundError(f"会话不存在: {conversation_id}")
 
         # 2. 去重检查
         if data.external_msg_id:
@@ -231,7 +232,7 @@ class ConversationService(BaseService):
         # 先校验会话归属
         conv = await self.conversation_repo.get_by_unique(id=conversation_id, user_id=user_id)
         if not conv:
-            raise ValueError(f"会话不存在: {conversation_id}")
+            raise NotFoundError(f"会话不存在: {conversation_id}")
 
         messages = await self.message_repo.list_by_conversation(conversation_id, limit=limit)
         return [MessageResponse.model_validate(m, from_attributes=True) for m in messages]
@@ -296,7 +297,7 @@ class ConversationService(BaseService):
         # 校验会话归属
         conv = await self.conversation_repo.get_by_unique(id=conversation_id, user_id=user_id)
         if not conv:
-            raise ValueError(f"会话不存在: {conversation_id}")
+            raise NotFoundError(f"会话不存在: {conversation_id}")
 
         # TODO: 实际调用 Chrome Skill 拉取页面消息
         # 此处为占位逻辑，真正实现需与 Sync 系统集成
