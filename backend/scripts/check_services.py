@@ -24,7 +24,7 @@ from sqlalchemy import text
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
-from app.db.base import engine
+from app.db.base import dispose_engine, get_engine
 
 logger = get_logger("scripts.check_services")
 
@@ -32,7 +32,7 @@ logger = get_logger("scripts.check_services")
 async def check_postgres() -> tuple[bool, str]:
     """探测 PostgreSQL：SELECT 1 + 版本号。"""
     try:
-        async with engine.connect() as conn:
+        async with get_engine().connect() as conn:
             await conn.execute(text("SELECT 1"))
             version = (await conn.execute(text("SELECT version()"))).scalar_one()
             return True, f"ok: {version.split(',')[0]}"
@@ -101,7 +101,7 @@ async def main() -> int:
         results[name] = ok
         logger.info("探测结果", component=name, ok=ok, detail=detail)
 
-    await engine.dispose()
+    await dispose_engine()
 
     all_ok = all(results.values())
     logger.info("探测完成", results=results, all_ok=all_ok)

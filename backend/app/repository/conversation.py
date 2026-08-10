@@ -54,3 +54,10 @@ class ConversationRepository(BaseRepository[Conversation]):
             order_by="updated_at",
             limit=limit,
         )
+
+    async def count_active(self, user_id: int) -> int:
+        """统计用户活跃会话数（并发限流检查用）。
+
+        count_by_filter 只发 COUNT 聚合，比 list_active 取全量再 len 更省。
+        """
+        return await self.count_by_filter({"user_id": user_id, "status": "active"})
