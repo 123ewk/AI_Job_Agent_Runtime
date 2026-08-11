@@ -81,11 +81,21 @@ class JobService(BaseService):
         if filters.platform is not None:
             filter_dict["platform"] = filters.platform
 
-        jobs, total = await self.job_repo.list_by_filter_with_count(
-            filters=filter_dict,
-            page=page,
-            page_size=page_size,
-        )
+        # keyword / min_score 需要非等值过滤，走扩展方法；否则走通用分页
+        if filters.keyword or filters.min_score is not None:
+            jobs, total = await self.job_repo.list_with_search(
+                filters=filter_dict,
+                keyword=filters.keyword,
+                min_score=filters.min_score,
+                page=page,
+                page_size=page_size,
+            )
+        else:
+            jobs, total = await self.job_repo.list_by_filter_with_count(
+                filters=filter_dict,
+                page=page,
+                page_size=page_size,
+            )
 
         items = [JobResponse.model_validate(j, from_attributes=True) for j in jobs]
         return PaginatedResponse(items=items, total=total, page=page, page_size=page_size)

@@ -65,6 +65,31 @@ class TestJobsAPI:
         assert data["total"] == 1
         assert data["items"][0]["external_id"] == "list-1"
 
+    async def test_list_jobs_keyword_filter(self, client: AsyncClient) -> None:
+        """keyword 按 title/company 模糊过滤（A4 回归）。"""
+        await client.post(BASE, json=_job_payload("kw-1", title="Python 后端工程师"))
+        await client.post(BASE, json=_job_payload("kw-2", title="Java 后端工程师"))
+
+        resp = await client.get(BASE, params={"keyword": "Python"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["items"][0]["external_id"] == "kw-1"
+
+    async def test_list_jobs_min_score_filter(self, client: AsyncClient) -> None:
+        """min_score 按 score>= 过滤（A4 回归）。"""
+        # JobCreate 无 score 字段，先创建再 PUT 更新评分
+        create_high = await client.post(BASE, json=_job_payload("score-1"))
+        create_low = await client.post(BASE, json=_job_payload("score-2"))
+        await client.put(f"{BASE}/{create_high.json()['id']}", json={"score": 0.9})
+        await client.put(f"{BASE}/{create_low.json()['id']}", json={"score": 0.2})
+
+        resp = await client.get(BASE, params={"min_score": 0.5})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["items"][0]["external_id"] == "score-1"
+
     async def test_get_job(self, client: AsyncClient) -> None:
         """GET /jobs/{id} 返回详情。"""
         create = await client.post(BASE, json=_job_payload("get-1"))
