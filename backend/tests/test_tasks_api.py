@@ -8,8 +8,14 @@ status 为 canceled（单 l）；审批路由为 /tasks/{task_id}/approvals/*。
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.schema.enums import TaskStatus
 
 BASE = "/api/v1/tasks"
 
@@ -19,6 +25,32 @@ async def _create_task(client: AsyncClient, task_type: str = "user_initiated") -
     resp = await client.post(BASE, json={"type": task_type})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
+
+
+async def _seed_pending_approval(
+    test_session_factory: async_sessionmaker[AsyncSession],
+    task_id: int,
+    user_id: int,
+) -> int:
+    """直接插入一条 pending 状态的 Approval，返回其 id。
+
+    Approval 无 API 创建路由（由 Runtime 内部创建），故通过 session 直插测试数据。
+    """
+    from app.models.approval import Approval, ApprovalStatus, ApprovalType
+
+    async with test_session_factory() as session:
+        approval = Approval(
+            task_id=task_id,
+            user_id=user_id,
+            type=ApprovalType.SALARY.value,
+            payload={"salary": "20k"},
+            status=ApprovalStatus.PENDING.value,
+            expires_at=datetime.now(UTC) + timedelta(seconds=20),
+        )
+        session.add(approval)
+        await session.commit()
+        await session.refresh(approval)
+        return approval.id
 
 
 class TestTasksAPI:
@@ -90,6 +122,51 @@ class TestTasksAPI:
         assert data["pending"] == 1
         assert data["max_concurrent"] == 3
 
+    async def test_create_task_with_thread_id(
+        self,
+        client: AsyncClient,
+        test_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """传入 thread_id 时优先使用（A6 回归，DB 直查校验）。
+
+        TaskResponse 不含 thread_id 字段，故查库断言落库值。
+        """
+        thread_id = str(uuid4())
+        resp = await client.post(BASE, json={"type": "user_initiated", "thread_id": thread_id})
+        assert resp.status_code == 201, resp.text
+        task_id = resp.json()["id"]
+
+        from app.models.task import Task
+
+        async with test_session_factory() as session:
+            task = await session.get(Task, task_id)
+            assert task is not None
+            assert str(task.thread_id) == thread_id
+
+    async def test_create_task_invalid_thread_id(self, client: AsyncClient) -> None:
+        """非法 thread_id 返回 400，不落库（A6 边界）。"""
+        resp = await client.post(BASE, json={"type": "user_initiated", "thread_id": "not-a-uuid"})
+        assert resp.status_code == 400, resp.text
+
+    async def test_update_status_persists_progress(
+        self,
+        client: AsyncClient,
+        test_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """update_status 写入 progress 后 GET 能读到（A7 回归）。"""
+        task_id = await _create_task(client)
+
+        from app.service.task import TaskService
+
+        async with test_session_factory() as session:
+            service = TaskService(db=session)
+            result = await service.update_status(task_id, TaskStatus.RUNNING, progress=42)
+            assert result.progress == 42
+
+        resp = await client.get(f"{BASE}/{task_id}")
+        assert resp.status_code == 200
+        assert resp.json()["progress"] == 42
+
     @pytest.mark.skip(reason="无 /tasks/{id}/checkpoints 路由，Checkpoint 索引由 Runtime 内部维护")
     async def test_get_task_checkpoints(self, client: AsyncClient) -> None:
         """占位：Checkpoint 路由未实现。"""
@@ -122,3 +199,43 @@ class TestApprovalAPI:
             json={"approval_id": 1, "approved": False},
         )
         assert resp.status_code >= 400
+
+    async def test_approve_success(
+        self,
+        client: AsyncClient,
+        test_session_factory: async_sessionmaker[AsyncSession],
+        seed_user: int,
+    ) -> None:
+        """有 pending 审批时 approve 成功，返回 200。
+
+        回归：A1 曾因访问不存在的 decision_payload + 缺 user_id 而 500。
+        """
+        task_id = await _create_task(client)
+        approval_id = await _seed_pending_approval(test_session_factory, task_id, seed_user)
+
+        resp = await client.post(
+            f"{BASE}/{task_id}/approvals/approve",
+            json={"approval_id": approval_id, "approved": True, "user_note": "同意"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "ok"
+
+    async def test_deny_success(
+        self,
+        client: AsyncClient,
+        test_session_factory: async_sessionmaker[AsyncSession],
+        seed_user: int,
+    ) -> None:
+        """有 pending 审批时 deny 成功，返回 200。
+
+        回归：A2 曾因缺 user_id 而 500。
+        """
+        task_id = await _create_task(client)
+        approval_id = await _seed_pending_approval(test_session_factory, task_id, seed_user)
+
+        resp = await client.post(
+            f"{BASE}/{task_id}/approvals/deny",
+            json={"approval_id": approval_id, "approved": False},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "ok"

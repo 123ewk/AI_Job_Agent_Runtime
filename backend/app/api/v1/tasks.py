@@ -72,13 +72,15 @@ async def create_task(
 ) -> TaskResponse:
     """创建新任务并入队。
 
-    任务类型：
-    - proactive_job: 主动求职（P2）
-    - proactive_chat: 主动打招呼（P2）
-    - hr_reply: HR 消息回复（P1）
-    - sync: 数据同步（P3）
-    - recovery: 故障恢复（P3）
+    任务类型与优先级映射（与 _get_priority_by_type / doc 04 保持一致）：
     - approval_resume: 人工确认后继续（P0）
+    - recovery: 故障恢复（P0）
+    - hr_reply: HR 消息回复（P1）
+    - sync: 数据同步（P1）
+    - user_initiated: 用户主动触发（P2）
+    - proactive_chat: 主动打招呼（P2）
+    - proactive_job: 主动求职（P3）
+    - background_scan: 后台扫描（P3）
 
     优先级自动分配，任务创建后进入队列等待执行。
     """
@@ -153,8 +155,9 @@ async def approve_task(
     if approval is None:
         raise NotFoundError("任务没有待处理的审批")
 
+    # 使用请求体 approval_id + 当前用户；approve 内部会校验归属与 pending 状态
     approval_service = ApprovalService(service.db)
-    await approval_service.approve(approval.id, data.decision_payload or {})
+    await approval_service.approve(data.approval_id, user_id, data.user_note)
     return StatusResponse(status="ok", message="已批准")
 
 
@@ -178,7 +181,8 @@ async def deny_task(
         raise NotFoundError("任务没有待处理的审批")
 
     approval_service = ApprovalService(service.db)
-    await approval_service.deny(approval.id)
+    # deny 签名 (approval_id, user_id, reason=None)，传入当前用户
+    await approval_service.deny(approval.id, user_id)
     return StatusResponse(status="ok", message="已拒绝")
 
 

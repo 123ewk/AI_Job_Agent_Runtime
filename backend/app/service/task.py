@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.models.task import Task as TaskModel
 from app.repository.task import TaskRepository
 from app.repository.task_checkpoint_index import TaskCheckpointIndexRepository
@@ -76,8 +76,11 @@ class TaskService(BaseService):
         """ORM Model 转 DTO。
 
         实现 Model -> DTO 转换，确保 ORM 字段不直接泄漏到 API。
-        注意：progress 字段目前由 payload["progress"] 派生，V1 简化为 0。
+        progress 由 payload["progress"] 派生（update_status 写入），
+        并收敛到 0-100，与 TaskResponse.progress 的 Pydantic 约束一致。
         """
+        raw_progress = task.payload.get("progress", 0) if isinstance(task.payload, dict) else 0
+        progress = 0 if not isinstance(raw_progress, int) else max(0, min(100, raw_progress))
         return TaskResponse(
             id=task.id,
             user_id=task.user_id,
@@ -88,7 +91,7 @@ class TaskService(BaseService):
             priority=TaskPriority(task.priority),
             retry_count=task.retry_count,
             max_retries=task.max_retries,
-            progress=0,  # TODO: 从 payload 提取进度
+            progress=progress,
             error_message=task.error,
             result=task.result,
             started_at=task.started_at.isoformat() if task.started_at else None,
@@ -110,15 +113,24 @@ class TaskService(BaseService):
 
         设计说明：
         1. 事务内创建 DB 记录
-        2. 生成 thread_id（UUID，作为 LangGraph Checkpoint 锚点）
-        3. 队列入队（待 QueueClient 实现后补充）
+        2. thread_id：调用方指定优先（延续上下文），否则新建 UUID（LangGraph Checkpoint 锚点）
+        3. 队列入队 Redis Stream（按优先级分流）
         4. 返回 DTO
         """
         # 自动分配优先级
         priority = self._get_priority_by_type(data.type) if data.priority is None else data.priority
 
-        # 生成 thread_id（LangGraph 执行线程锚点）
-        thread_id = uuid4()
+        # 优先使用调用方指定 thread_id（延续已有上下文，doc 03: task.thread_id = conversation.thread_id），
+        # 未指定则新建。非法 UUID 立即 400，避免脏数据入库。
+        if data.thread_id is not None:
+            try:
+                thread_id: UUID = UUID(data.thread_id)
+            except ValueError as exc:
+                # 输入非法时先赋给变量再抛异常，避免 f-string 直接进异常（ruff EM102）
+                msg = f"无效的 thread_id: {data.thread_id}"
+                raise BadRequestError(msg) from exc
+        else:
+            thread_id = uuid4()
 
         # 创建 Task Model
         task = await self.task_repo.create(
@@ -326,8 +338,6 @@ class TaskService(BaseService):
         - 自动设置 started_at/completed_at 时间戳
         - 更新失败时事务回滚，保证状态一致性
         """
-        _ = progress  # TODO: 更新到 task.payload["progress"]
-
         task = await self.task_repo.get_for_update(task_id)
         if task is None:
             msg = f"Task {task_id} not found"
@@ -353,6 +363,12 @@ class TaskService(BaseService):
         # 更新错误信息
         if error_message is not None:
             task.error = error_message  # type: ignore[attr-defined]
+
+        # 进度写回 payload，供 _to_response 派生 progress 字段
+        if progress is not None:
+            payload = dict(task.payload or {})
+            payload["progress"] = progress
+            task.payload = payload  # type: ignore[assignment]
 
         self.log_with_context(
             20,
