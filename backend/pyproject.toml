@@ -32,6 +32,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "structlog>=24.1.0",
     "aiofiles>=23.2.0",
+    # 敏感配置加密存储（api_key 等）
+    "cryptography>=42.0.0",
 ]
 
 [dependency-groups]

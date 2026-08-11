@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 class TestSettingsAPI:
@@ -125,6 +126,30 @@ class TestSettingsAPI:
         # api_key 应回收为掩码
         assert data["api_key_masked"] is not None
 
+    async def test_get_all_masks_api_key(self, client: AsyncClient) -> None:
+        """GET /settings 全量列表不得泄露 api_key 明文（A3 回归）。"""
+        plain_key = "sk-leak-check-1234567890"
+        await client.put(
+            f"{self.BASE_URL}/llm",
+            json={
+                "provider": "openai",
+                "base_url": None,
+                "model": "gpt-4o-mini",
+                "api_key": plain_key,
+                "temperature": 0.7,
+            },
+        )
+
+        resp = await client.get(self.BASE_URL)
+        assert resp.status_code == 200
+        data = resp.json()
+
+        llm_cat = next(item for item in data if item["category"] == "llm")
+        api_key_item = next(s for s in llm_cat["settings"] if s["key"] == "api_key")
+        # 掩码后不应包含明文子串
+        assert api_key_item["value"] != plain_key
+        assert plain_key not in (api_key_item["value"] or "")
+
     @pytest.mark.skip(reason="listening HTTP 路由尚未实现（Service 方法存在，待路由接线 + 存储键补全）")
     async def test_get_listening_state(self, client: AsyncClient) -> None:
         """获取监听状态。"""
@@ -150,3 +175,64 @@ class TestSettingsAPI:
         data = resp.json()
         assert "ok" in data
         assert "detail" in data
+
+    async def test_api_key_stored_encrypted(
+        self,
+        client: AsyncClient,
+        test_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """api_key 落库为密文（B5 回归）。
+
+        PUT 后直查 settings 表，断言 value 带 encrypted 标记且不含明文；
+        GET /settings/llm 返回掩码而非密文或明文。
+        """
+        plain_key = "sk-encrypt-check-987654321"
+        put_resp = await client.put(
+            f"{self.BASE_URL}/llm",
+            json={
+                "provider": "openai",
+                "base_url": None,
+                "model": "gpt-4o-mini",
+                "api_key": plain_key,
+                "temperature": 0.7,
+            },
+        )
+        assert put_resp.status_code == 200
+
+        # 直查 DB：api_key 行应为密文
+        from sqlalchemy import select
+
+        from app.models.setting import Setting
+
+        async with test_session_factory() as session:
+            result = await session.execute(
+                select(Setting).where(Setting.category == "llm", Setting.key == "api_key")
+            )
+            setting = result.scalar_one()
+            stored = setting.value
+            assert isinstance(stored, dict)
+            assert stored.get("encrypted") is True
+            assert plain_key not in str(stored["value"])
+
+        # GET 应返回掩码（既非明文也非密文）
+        get_resp = await client.get(f"{self.BASE_URL}/llm")
+        assert get_resp.status_code == 200
+        masked = get_resp.json()["api_key_masked"]
+        assert masked is not None
+        assert plain_key not in masked
+
+    async def test_api_key_validate_after_encrypt(self, client: AsyncClient) -> None:
+        """加密后 validate 能识别已配置 api_key（解密存在性检查正常）。"""
+        await client.put(
+            f"{self.BASE_URL}/llm",
+            json={
+                "provider": "openai",
+                "base_url": None,
+                "model": "gpt-4o-mini",
+                "api_key": "sk-validate-after-encrypt",
+                "temperature": 0.7,
+            },
+        )
+        resp = await client.post(f"{self.BASE_URL}/validate-llm")
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True  # 已配置 → 占位实现返回 True

@@ -67,6 +67,8 @@ class MockSettings:
     cors_allow_origins = ""
     cors_allow_credentials = True
     cors_max_age_seconds = 600
+    # 敏感配置加密密钥（api_key 加密用），测试环境固定值以便解密断言
+    jwt_secret_key = "test-secret"  # noqa: S105 - 测试 mock 固定密钥，非真实凭据
 
     @property
     def cors_origins_list(self) -> list[str]:

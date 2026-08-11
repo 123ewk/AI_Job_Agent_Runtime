@@ -14,7 +14,10 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
+from app.core.crypto import decrypt_value, encrypt_value
 from app.core.exceptions import BadRequestError
+from app.models.setting import Setting
 from app.repository.setting import SettingRepository
 from app.schema.setting import (
     AgentConfigResponse,
@@ -99,13 +102,28 @@ class SettingsService(BaseService):
         super().__init__(db)
         self.setting_repo = SettingRepository(db)
 
+    def _decrypt_if_needed(self, key: str, s: Setting) -> object:
+        """读取 Setting.value：api_key 密文解密，旧明文向后兼容。
+
+        B5 前旧数据为 {"value": plaintext}（无 encrypted 标记），按明文返回；
+        B5 后新数据为 {"value": ciphertext, "encrypted": true}，解密后返回。
+        密钥变更导致解密失败时视为未配置（None），避免 500。
+        """
+        raw = s.value.get("value") if isinstance(s.value, dict) else s.value
+        if key == "api_key" and isinstance(s.value, dict) and s.value.get("encrypted"):
+            try:
+                return decrypt_value(get_settings().jwt_secret_key, raw)
+            except Exception:
+                self.logger.exception("api_key 解密失败，视为未配置（可能密钥已变更）")
+                return None
+        return raw
+
     async def _get_category_as_dict(self, user_id: int, category: str) -> dict[str, Any]:
         """获取分类配置为字典，自动填充默认值。"""
         settings = await self.setting_repo.get_by_user_and_category(user_id, category)
         result: dict[str, Any] = {}
         for s in settings:
-            # value 存储为 {"value": actual_value} 结构
-            result[s.key] = s.value.get("value") if isinstance(s.value, dict) else s.value
+            result[s.key] = self._decrypt_if_needed(s.key, s)
         return result
 
     async def get_all(self, user_id: int) -> list[SettingCategoryResponse]:
@@ -115,12 +133,11 @@ class SettingsService(BaseService):
         """
         all_settings = await self.setting_repo.list_by_user(user_id)
 
-        # 按分类分组
+        # 按分类分组（api_key 先解密，供下方掩码）
         by_category: dict[str, dict[str, Any]] = {cat: {} for cat in ALL_CATEGORIES}
         for s in all_settings:
             if s.category in by_category:
-                value = s.value.get("value") if isinstance(s.value, dict) else s.value
-                by_category[s.category][s.key] = value
+                by_category[s.category][s.key] = self._decrypt_if_needed(s.key, s)
 
         # 构建响应（填充默认值）
         result: list[SettingCategoryResponse] = []
@@ -129,6 +146,9 @@ class SettingsService(BaseService):
             items: list[SettingItem] = []
             for key, default_value in CONFIG_DEFAULTS[category].items():
                 value = current.get(key, default_value)
+                # api_key 属高敏配置，全量列表也只返回掩码，不泄露明文
+                if category == "llm" and key == "api_key":
+                    value = _mask_api_key(value)
                 items.append(SettingItem(key=key, value=value))
             result.append(SettingCategoryResponse(category=category, settings=items))
 
@@ -278,7 +298,13 @@ class SettingsService(BaseService):
             # Upsert 配置
             existing = await self.setting_repo.get_by_key(user_id, category, item.key)
             # value 存储为 {"value": actual_value} 结构，支持多种类型
-            value_data = {"value": item.value}
+            # api_key 属高敏配置，落库前对称加密，标记 encrypted 供读取侧解密
+            value = item.value
+            if category == "llm" and item.key == "api_key" and isinstance(value, str) and value:
+                value = encrypt_value(get_settings().jwt_secret_key, value)
+                value_data: dict[str, Any] = {"value": value, "encrypted": True}
+            else:
+                value_data = {"value": value}
 
             if existing:
                 await self.setting_repo.update(existing, {"value": value_data})
