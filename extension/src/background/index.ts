@@ -51,19 +51,19 @@ chrome.runtime.onStartup.addListener(() => {
 })
 
 // ---------------------------------------------------------------------------
-// 2. Side Panel 行为：点击扩展图标打开 side panel（代替 popup）
+// 2. Side Panel 打开（保留 onClicked 备用）
 // ---------------------------------------------------------------------------
 
-// MV3：通过 action.onClicked 打开 side panel
-// 注意：manifest 中如果设置了 default_popup，则 onClicked 不会触发
-// 我们保留 popup 作为 fallback，但优先尝试打开 sidepanel
+// 注意：manifest 已设 default_popup，Chrome 规定此时点击图标只弹 popup，
+// action.onClicked 不会触发，因此下方 handler 当前为死代码。
+// 实际入口：popup/App.vue 的「打开 SidePanel ▸」按钮经用户手势调用 chrome.sidePanel.open()。
+// 若未来移除 default_popup，此 handler 即成为「点击图标直接开 SidePanel」的路径。
 chrome.action.onClicked.addListener(async (tab) => {
   if (tab?.id !== undefined) {
     try {
       await chrome.sidePanel.open({ tabId: tab.id })
     } catch (err) {
-      // side panel 不可用时回退到 popup（manifest 中的 default_popup）
-      console.warn("[background] sidePanel.open failed, fallback to popup:", err)
+      console.warn("[background] sidePanel.open failed:", err)
     }
   }
 })
