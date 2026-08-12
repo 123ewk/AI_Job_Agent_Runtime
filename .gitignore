@@ -14,8 +14,9 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# 锚定仓库根：本模式来自 Python venv 惯例，未锚定会误伤 extension/src/lib/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
