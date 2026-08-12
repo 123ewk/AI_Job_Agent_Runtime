@@ -1,0 +1,146 @@
+/* 设置表单共享样式（供各分组面板 import，非 scoped，类名前缀 .form- 避免冲突）。
+   统一输入/下拉/步进器/单选卡片的 token 化外观（样式规范 §40）。 */
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
+}
+
+.form-label {
+  font-size: var(--fs-secondary);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.form-input,
+.form-select {
+  width: 100%;
+  height: 34px;
+  padding: 0 var(--space-3);
+  box-sizing: border-box;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
+  font-size: var(--fs-body);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.form-input:focus,
+.form-select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.15);
+}
+
+.form-hint {
+  margin: 0;
+  font-size: var(--fs-aux);
+  color: var(--color-text-tertiary);
+}
+
+/* 双列栅格（如薪资区间） */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+/* 数字步进器 */
+.form-stepper {
+  display: inline-flex;
+  align-items: center;
+}
+
+.form-stepper button {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
+  font-size: var(--fs-body);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.form-stepper button:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.form-stepper button:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.form-stepper button:hover {
+  background: var(--color-bg-secondary);
+}
+
+.form-stepper-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  height: 32px;
+  border-top: 1px solid var(--color-border-strong);
+  border-bottom: 1px solid var(--color-border-strong);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 单选卡片（回复风格/语气） */
+.form-radio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-3);
+}
+
+.form-radio-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.form-radio-card:hover {
+  border-color: var(--color-primary-hover);
+}
+
+.form-radio-card.active {
+  border-color: var(--color-primary);
+  background: rgba(22, 119, 255, 0.05);
+}
+
+.form-radio-name {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.form-radio-desc {
+  font-size: var(--fs-aux);
+  color: var(--color-text-tertiary);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* 分隔线（分节） */
+.form-divider {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: var(--space-4) 0;
+}
