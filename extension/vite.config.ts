@@ -13,6 +13,7 @@ export default defineConfig({
     target: "es2020",
     rollupOptions: {
       input: {
+        options: "src/options/index.html",
         sidepanel: "src/sidepanel/index.html",
         popup: "src/popup/index.html",
       },
