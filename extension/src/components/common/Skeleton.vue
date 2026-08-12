@@ -28,7 +28,7 @@ defineProps<{
 /* 呼吸闪烁替代转圈 */
 .skeleton-card,
 .skeleton-line {
-  background: var(--color-surface);
+  background: var(--color-skeleton);
   border-radius: var(--radius-sm);
   animation: skeleton-breathe 1.4s ease-in-out infinite;
 }

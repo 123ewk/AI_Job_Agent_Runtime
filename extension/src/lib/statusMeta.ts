@@ -1,6 +1,6 @@
-// 三态状态 → label/color 映射（设计权威：doc 12 §4.3 状态色映射）。
+// 三态状态 → label/color 映射（设计权威：docs/前端页面布局/AI 求职 Agent UI 样式设计规范.md §26/§34 状态色映射）。
 // 职责：集中维护 agent_state / monitoring_state / task.status / ws_state 的展示元数据，
-//       StatusBadge、ConnectIndicator 及后续 Timeline/EventLog 等组件统一消费，避免散落硬编码。
+//       StatusBadge、ConnectIndicator 及 Timeline/EventLog 等组件统一消费，避免散落硬编码。
 // 原理：色值引用 CSS 变量而非十六进制，主题切换（data-theme）时无需改动映射。
 
 import type { StatusValue } from "../types/components"
@@ -18,25 +18,25 @@ export interface StatusMeta {
 const META: Record<StatusValue, StatusMeta> = {
   // agent_state
   idle: { label: "空闲", color: "var(--color-text-secondary)" },
-  planning: { label: "规划中", color: "var(--color-running)" },
-  executing: { label: "执行中", color: "var(--color-running)" },
-  waiting_human: { label: "等待人工", color: "var(--color-waiting)" },
-  recovering: { label: "恢复中", color: "var(--color-waiting)", pulse: true },
+  planning: { label: "规划中", color: "var(--color-info)" },
+  executing: { label: "执行中", color: "var(--color-info)" },
+  waiting_human: { label: "等待人工", color: "var(--color-warning)" },
+  recovering: { label: "恢复中", color: "var(--color-warning)", pulse: true },
   done: { label: "已完成", color: "var(--color-success)" },
   // monitoring_state
   monitoring: { label: "监听中", color: "var(--color-success)" },
-  paused: { label: "已暂停", color: "var(--color-waiting)" },
-  stopped: { label: "已停止", color: "var(--color-error)" },
+  paused: { label: "已暂停", color: "var(--color-warning)" },
+  stopped: { label: "已停止", color: "var(--color-danger)" },
   // task.status
-  running: { label: "运行中", color: "var(--color-running)" },
-  waiting_approval: { label: "待确认", color: "var(--color-waiting)" },
+  running: { label: "运行中", color: "var(--color-info)" },
+  waiting_approval: { label: "待确认", color: "var(--color-warning)" },
   succeeded: { label: "成功", color: "var(--color-success)" },
-  failed: { label: "失败", color: "var(--color-error)" },
+  failed: { label: "失败", color: "var(--color-danger)" },
   canceled: { label: "已取消", color: "var(--color-text-secondary)" },
   // ws_state
   connected: { label: "已连接", color: "var(--color-success)" },
-  reconnecting: { label: "重连中", color: "var(--color-waiting)", pulse: true },
-  disconnected: { label: "未连接", color: "var(--color-error)" },
+  reconnecting: { label: "重连中", color: "var(--color-warning)", pulse: true },
+  disconnected: { label: "未连接", color: "var(--color-danger)" },
 }
 
 /** 零信任兜底：未知状态值不抛错，回退为文本色 + 原值。 */

@@ -36,7 +36,7 @@ async function openSidePanel(): Promise<void> {
 .popup {
   padding: var(--space-3);
   min-width: 240px;
-  background: var(--color-bg);
+  background: var(--color-bg-page);
   color: var(--color-text-primary);
 }
 

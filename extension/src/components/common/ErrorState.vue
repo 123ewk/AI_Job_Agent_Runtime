@@ -31,7 +31,7 @@ defineEmits<{ retry: [] }>()
 .message {
   margin: 0;
   font-size: var(--fs-body);
-  color: var(--color-error);
+  color: var(--color-danger);
 }
 
 .trace {
@@ -46,7 +46,7 @@ defineEmits<{ retry: [] }>()
   padding: var(--space-1) var(--space-4);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  background: var(--color-surface);
+  background: var(--color-bg-card);
   color: var(--color-text-primary);
   font-size: var(--fs-aux);
   cursor: pointer;

@@ -89,7 +89,7 @@ function onToggleMonitoring(): void {
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
-  background: var(--color-bg);
+  background: var(--color-bg-page);
   color: var(--color-text-primary);
 }
 
@@ -97,7 +97,7 @@ function onToggleMonitoring(): void {
    仅 tab-content 滚动，Header 与 TabNav 固定不滚走。 */
 .app-header {
   border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
+  background: var(--color-bg-card);
   padding: var(--space-2) var(--space-3);
   display: flex;
   flex-direction: column;
@@ -141,7 +141,7 @@ function onToggleMonitoring(): void {
 .tab-nav {
   display: flex;
   flex-shrink: 0;
-  background: var(--color-surface);
+  background: var(--color-bg-card);
   border-bottom: 1px solid var(--color-border);
 }
 

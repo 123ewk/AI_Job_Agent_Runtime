@@ -1,43 +1,84 @@
-/* 设计 token（设计权威：docs/AI求职Agent_设计文档_V2.0/12-前端UI设计.md §4.1）。
- * 职责：定义全局 CSS 变量，供所有组件 scoped style 消费（var(--color-*)）。
- * 原理：CSS 变量从 :root 向下继承，SFC scoped style 无需重复定义；
- *       后续 Light 主题仅需 data-theme="light" 切换变量组，无组件改动（doc 12 §16）。
+/* 设计 token（设计权威：docs/前端页面布局/AI 求职 Agent UI 样式设计规范.md §51 推荐 CSS Token）。
+ * 职责：定义全局 CSS 变量，供所有组件 scoped style 消费（var(--color-*)），是唯一颜色/间距/字号来源。
+ * 原则：浅色主区（#F5F7FA）+ 深色导航（#0B172A / header #071426）；禁止组件内硬编码色值。
+ * 扩展位：深色模式（§48）通过 data-theme="dark" 切换变量组，无组件改动。
  */
 
 :root {
-  /* 主题：Dark（V2 默认，Light 预留 data-theme="light"） */
-  --color-bg: #111827;
-  --color-surface: #1f2937; /* 卡片/输入区 */
-  --color-border: #374151;
-  --color-text-primary: #e5e7eb;
-  --color-text-secondary: #9ca3af;
+  /* ===== 品牌与语义色（§33/§34/§51） ===== */
+  --color-primary: #1677ff;        /* 主操作/选中导航/进行中 */
+  --color-primary-hover: #4096ff;
+  --color-success: #22c55e;        /* 运行中/完成/已连接/已回复 */
+  --color-warning: #f59e0b;        /* 等待人工/风险/即将超时/重连 */
+  --color-danger: #ef4444;         /* 失败/异常/拒绝/高风险 */
+  --color-info: #3b82f6;           /* 普通提示/进行中/信息事件 */
 
-  /* 语义色 */
-  --color-primary: #6366f1; /* 主按钮/当前任务/Agent 态 */
-  --color-primary-hover: #818cf8;
-  --color-success: #22c55e; /* succeeded/monitoring */
-  --color-running: #3b82f6; /* planning/executing/running */
-  --color-waiting: #f59e0b; /* waiting_human/waiting_approval/paused/reconnecting */
-  --color-error: #ef4444; /* failed/disconnected/stopped */
+  /* ===== 背景（§35/§51：浅色主区 + 白卡片） ===== */
+  --color-bg-page: #f5f7fa;        /* 页面主背景 */
+  --color-bg-card: #ffffff;        /* 卡片/输入区背景 */
+  --color-bg-secondary: #f8fafc;   /* 次级填充（快捷操作块/导航底部卡片） */
+  --color-skeleton: #e9edf3;       /* 骨架屏填充 */
 
-  /* 字体 */
-  --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --fs-title: 16px;
-  --fs-body: 14px;
-  --fs-aux: 12px;
+  /* ===== 文本（§35） ===== */
+  --color-text-primary: #111827;
+  --color-text-secondary: #475569;
+  --color-text-tertiary: #64748b;
+  --color-text-disabled: #94a3b8;
 
-  /* 间距/圆角 */
+  /* ===== 边框（§14.2/§35） ===== */
+  --color-border: #e8edf3;
+  --color-border-strong: #d9e2ec;  /* 输入框/交互边框 */
+
+  /* ===== 深色导航（Dashboard Layout：§6/§9，样式规范 §6/§9） ===== */
+  --color-nav-bg: #0b172a;         /* 左侧导航背景 */
+  --color-nav-header: #071426;     /* 顶部 Header 背景 */
+  --color-nav-text: #cbd5e1;       /* 导航默认文字 */
+  --color-nav-text-muted: #a9b7ca; /* 导航次要文字/图标 */
+  --color-nav-active: #0f4c9b;     /* 选中项背景（样式规范 §9.6） */
+  --color-nav-hover: rgba(255, 255, 255, 0.06);
+  --color-nav-card: rgba(255, 255, 255, 0.05); /* 今日数据卡片 */
+
+  /* ===== 字体（§31/§39：Inter + 中文字体栈） ===== */
+  --font-sans: "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+
+  /* 字号体系（§32 Typography Scale） */
+  --fs-page-title: 20px;           /* 页面主标题 */
+  --fs-card-title: 16px;           /* Card 标题 */
+  --fs-body: 14px;                 /* 普通正文 */
+  --fs-secondary: 13px;            /* 次级文字 */
+  --fs-aux: 12px;                  /* 辅助说明 */
+  --fs-badge: 11px;                /* Badge/角标 */
+  --fs-number: 24px;               /* 核心数字（今日数据/统计） */
+
+  /* ===== 间距（§36：4px 基础间距） ===== */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
+  --space-5: 20px;
   --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ===== 圆角（§14.1：卡片 10px，大型 12px） ===== */
   --radius-sm: 6px;
   --radius-md: 8px;
+  --radius-card: 10px;
   --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* ===== 阴影层级（§43：三级） ===== */
+  --shadow-card: 0 2px 8px rgba(15, 23, 42, 0.04);
+  --shadow-dropdown: 0 8px 24px rgba(15, 23, 42, 0.1);
+  --shadow-modal: 0 16px 48px rgba(15, 23, 42, 0.16);
+
+  /* ===== 过渡（§42：克制微动效） ===== */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
 }
 
-/* 基础元素默认值：统一字体与暗色背景，避免各组件各自声明 */
+/* 基础元素默认值：统一字体与浅色背景，避免各组件各自声明 */
 * {
   box-sizing: border-box;
 }
@@ -47,7 +88,7 @@ body {
   font-family: var(--font-sans);
   font-size: var(--fs-body);
   color: var(--color-text-primary);
-  background: var(--color-bg);
+  background: var(--color-bg-page);
   -webkit-font-smoothing: antialiased;
 }
 

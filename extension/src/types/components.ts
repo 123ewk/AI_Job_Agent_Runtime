@@ -1,6 +1,7 @@
-// 组件契约类型（设计权威：doc 12 §12.1 —— TS interface 统一在此定义）。
-// 职责：TabId / Toast / 三态 StatusValue 等跨组件共享类型，
+// 组件契约类型（设计权威：docs/前端页面布局/AI 求职 Agent UI 样式设计规范.md —— TS interface 统一在此定义）。
+// 职责：Toast / 三态 StatusValue 等跨组件共享类型，
 //       使 props 与 store 状态有单一事实来源，避免各组件重复声明字符串字面量。
+// 注：TabId 属旧 6-Tab 架构（doc 12），随 SidePanel 单列重构（增量 I4）修订。
 
 /** SidePanel 6 个 Tab 标识（doc 12 §5.1：状态|Timeline|聊天|审批|日志|设置） */
 export type TabId = "status" | "timeline" | "chat" | "approval" | "logs" | "settings"
@@ -15,9 +16,9 @@ export interface Toast {
 }
 
 /**
- * 三态分离 + WS 连接态（doc 12 §4.3 状态色映射）。
+ * 三态分离 + WS 连接态（状态色映射见 statusMeta.ts，遵循样式规范 §26/§34）。
  * agent_state / monitoring_state / task.status / ws_state 的值域，
- * 替代 Phase 1 单枚举混淆（Phase 1 旧 AgentState 见 types/messages.ts，待后续增量拆分）。
+ * UI 层状态权威；messages.ts 的 AgentState 为运行时线格式，保留但 UI 不再直接消费。
  */
 export type AgentRunState = "idle" | "planning" | "executing" | "waiting_human" | "recovering" | "done"
 export type MonitoringState = "idle" | "monitoring" | "paused" | "stopped"

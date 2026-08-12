@@ -35,11 +35,11 @@ const ui = useUiStore()
   max-width: 300px;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
-  background: var(--color-surface);
+  background: var(--color-bg-card);
   border: 1px solid var(--color-border);
   color: var(--color-text-primary);
   font-size: var(--fs-aux);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-dropdown);
 }
 
 /* 语义色左边条区分种类 */
@@ -48,7 +48,7 @@ const ui = useUiStore()
 }
 
 .toast.error {
-  border-left: 3px solid var(--color-error);
+  border-left: 3px solid var(--color-danger);
 }
 
 .toast.info {
