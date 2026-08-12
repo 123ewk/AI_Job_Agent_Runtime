@@ -3,7 +3,7 @@
 // 结构：Header(64px 深蓝) + Sidebar(220px 深色) + <router-view> 主内容。
 // 职责：页面骨架 + 导航状态；Agent 状态/自动模式等由 store 驱动（I3 起接线）。
 import { RouterLink, RouterView, useRouter } from "vue-router"
-import { ref } from "vue"
+import { onMounted, ref } from "vue"
 import {
   Bot,
   Bell,
@@ -20,6 +20,14 @@ import {
 import StatusBadge from "../components/common/StatusBadge.vue"
 import ConnectIndicator from "../components/common/ConnectIndicator.vue"
 import TodayStats from "../dashboard/TodayStats.vue"
+import { useConnectionStore } from "../stores/connection"
+
+const connection = useConnectionStore()
+
+onMounted(() => {
+  // 布局级探活：保证任意子页打开时侧栏连接状态正确（文档 §16）
+  void connection.checkHealth()
+})
 
 const NAV_ITEMS = [
   { path: "/overview", label: "总览", icon: LayoutDashboard },
@@ -76,8 +84,8 @@ function closeWindow(): void {
         <div class="sidebar-bottom">
           <TodayStats />
           <div class="connection">
-            <ConnectIndicator state="disconnected" />
-            <span class="connection-url">ws://localhost:8000</span>
+            <ConnectIndicator :state="connection.state" />
+            <span class="connection-url">ws://{{ connection.backendUrl }}</span>
           </div>
         </div>
       </aside>
