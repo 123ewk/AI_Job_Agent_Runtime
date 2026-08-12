@@ -1,10 +1,6 @@
 // 组件契约类型（设计权威：docs/前端页面布局/AI 求职 Agent UI 样式设计规范.md —— TS interface 统一在此定义）。
 // 职责：Toast / 三态 StatusValue 等跨组件共享类型，
 //       使 props 与 store 状态有单一事实来源，避免各组件重复声明字符串字面量。
-// 注：TabId 属旧 6-Tab 架构（doc 12），随 SidePanel 单列重构（增量 I4）修订。
-
-/** SidePanel 6 个 Tab 标识（doc 12 §5.1：状态|Timeline|聊天|审批|日志|设置） */
-export type TabId = "status" | "timeline" | "chat" | "approval" | "logs" | "settings"
 
 /** Toast 种类：成功绿 / 错误红 / 信息主色（doc 12 §4.2 动作反馈） */
 export type ToastKind = "success" | "error" | "info"
