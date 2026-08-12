@@ -1,0 +1,58 @@
+/* 设计 token（设计权威：docs/AI求职Agent_设计文档_V2.0/12-前端UI设计.md §4.1）。
+ * 职责：定义全局 CSS 变量，供所有组件 scoped style 消费（var(--color-*)）。
+ * 原理：CSS 变量从 :root 向下继承，SFC scoped style 无需重复定义；
+ *       后续 Light 主题仅需 data-theme="light" 切换变量组，无组件改动（doc 12 §16）。
+ */
+
+:root {
+  /* 主题：Dark（V2 默认，Light 预留 data-theme="light"） */
+  --color-bg: #111827;
+  --color-surface: #1f2937; /* 卡片/输入区 */
+  --color-border: #374151;
+  --color-text-primary: #e5e7eb;
+  --color-text-secondary: #9ca3af;
+
+  /* 语义色 */
+  --color-primary: #6366f1; /* 主按钮/当前任务/Agent 态 */
+  --color-primary-hover: #818cf8;
+  --color-success: #22c55e; /* succeeded/monitoring */
+  --color-running: #3b82f6; /* planning/executing/running */
+  --color-waiting: #f59e0b; /* waiting_human/waiting_approval/paused/reconnecting */
+  --color-error: #ef4444; /* failed/disconnected/stopped */
+
+  /* 字体 */
+  --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --fs-title: 16px;
+  --fs-body: 14px;
+  --fs-aux: 12px;
+
+  /* 间距/圆角 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+/* 基础元素默认值：统一字体与暗色背景，避免各组件各自声明 */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
