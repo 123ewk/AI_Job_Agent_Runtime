@@ -56,3 +56,19 @@ const CONV_STATUS_META: Record<string, { label: string; color: string }> = {
 export function conversationStatusMeta(status: string): { label: string; color: string } {
   return CONV_STATUS_META[status] ?? { label: status, color: "var(--color-text-secondary)" }
 }
+
+// 岗位状态（job.status：discovered/scored/chatting/applied/rejected/closed/skipped，小写）→ 展示元数据。
+// 与三态/会话映射分开：岗位状态值域独立，仿 conversationStatusMeta 独立函数 + 零信任兜底。
+const JOB_STATUS_META: Record<string, { label: string; color: string }> = {
+  discovered: { label: "待处理", color: "var(--color-text-secondary)" },
+  scored: { label: "已匹配", color: "var(--color-success)" },
+  chatting: { label: "已进入聊天", color: "var(--color-info)" },
+  applied: { label: "已投递", color: "var(--color-primary)" },
+  rejected: { label: "已拒绝", color: "var(--color-danger)" },
+  closed: { label: "已关闭", color: "var(--color-text-secondary)" },
+  skipped: { label: "已跳过", color: "var(--color-text-secondary)" },
+}
+
+export function jobStatusMeta(status: string): { label: string; color: string } {
+  return JOB_STATUS_META[status] ?? { label: status, color: "var(--color-text-secondary)" }
+}
