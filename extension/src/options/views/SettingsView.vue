@@ -1,14 +1,16 @@
 <script setup lang="ts">
 // 设置页（设计权威：前端布局 V1.0 §23 左侧菜单 + 右侧内容，样式规范 §6-§12）。
-// 菜单分组：LLM 配置 / Agent 策略 / 求职偏好 / 回复风格（对应后端 4 个 /settings/{group}）。
-// 简历管理/聊天设置/后台监听/数据同步/高级设置 后端暂无接口 → 本页不展示（Phase 2 补齐）。
+// 菜单分组：LLM 配置 / Agent 策略 / 求职偏好 / 回复风格（对应后端 4 个 /settings/{group}）
+// + 简历管理（I12 新增，对接 /api/v1/resumes）。
+// 聊天设置/后台监听/数据同步/高级设置 后端暂无接口 → 本页不展示（Phase 3 补齐）。
 import { onMounted, ref } from "vue"
-import { Bot, Briefcase, Cpu, MessageSquare } from "lucide-vue-next"
+import { Bot, Briefcase, Cpu, FileText, MessageSquare } from "lucide-vue-next"
 import ErrorState from "../../components/common/ErrorState.vue"
 import LlmSettings from "../../components/settings/LlmSettings.vue"
 import AgentSettings from "../../components/settings/AgentSettings.vue"
 import JobRuleSettings from "../../components/settings/JobRuleSettings.vue"
 import ReplyStyleSettings from "../../components/settings/ReplyStyleSettings.vue"
+import ResumeSettings from "../../components/settings/ResumeSettings.vue"
 import { useSettingsStore } from "../../stores/settings"
 
 const store = useSettingsStore()
@@ -18,6 +20,7 @@ const MENU = [
   { key: "agent", label: "Agent 策略", icon: Bot },
   { key: "job-rule", label: "求职偏好", icon: Briefcase },
   { key: "reply-style", label: "回复风格", icon: MessageSquare },
+  { key: "resume", label: "简历管理", icon: FileText },
 ] as const
 
 type MenuKey = (typeof MENU)[number]["key"]
@@ -63,7 +66,8 @@ onMounted(() => {
         <LlmSettings v-if="active === 'llm'" />
         <AgentSettings v-else-if="active === 'agent'" />
         <JobRuleSettings v-else-if="active === 'job-rule'" />
-        <ReplyStyleSettings v-else />
+        <ReplyStyleSettings v-else-if="active === 'reply-style'" />
+        <ResumeSettings v-else />
       </div>
     </div>
   </div>
