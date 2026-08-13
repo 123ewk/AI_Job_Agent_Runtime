@@ -88,10 +88,16 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
         全局 async_sessionmaker 单例。
     """
     if _state.session_factory is None:
+        # 先在锁外取 engine：get_engine() 自带 double-checked locking，线程安全。
+        # 若在持有 _init_lock 时调用 get_engine()，冷启动首请求会因同一线程重复
+        # 获取非重入 threading.Lock 而自死锁（生产首个触 DB 的请求必现，2026-08-13
+        # 已修复，见 docs/issues/2026-08-13-db-engine-lazy-init-self-deadlock.md）。
+        # 锁内只创建 async_sessionmaker（微秒级），符合惰性初始化设计意图。
+        engine = get_engine()
         with _init_lock:
             if _state.session_factory is None:
                 _state.session_factory = async_sessionmaker(
-                    bind=get_engine(),
+                    bind=engine,
                     class_=AsyncSession,
                     expire_on_commit=False,
                 )
