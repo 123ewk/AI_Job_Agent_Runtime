@@ -48,6 +48,10 @@ class JobUpdate(BaseSchema):
     status: JobStatus | None = Field(None, description="职位状态")
     score: float | None = Field(None, ge=0.0, description="匹配评分")
     source_url: str | None = Field(None, max_length=500)
+    score_detail: dict[str, object] | None = Field(
+        None,
+        description="评分明细（llm_score/llm_reason/keyword_hits/keyword_score/deductions，Agent 评分后落库）",
+    )
 
 
 class JobResponse(JobBase):
@@ -58,6 +62,10 @@ class JobResponse(JobBase):
     hr_id: int | None = Field(None, description="关联 HR ID")
     status: JobStatus = Field(..., description="职位状态")
     score: float | None = Field(None, description="匹配评分")
+    score_detail: dict[str, object] | None = Field(
+        None,
+        description="评分明细（llm_score/llm_reason/keyword_hits/keyword_score/deductions，Agent 评分后落库）",
+    )
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="更新时间")
 
