@@ -5,6 +5,7 @@
 import { RouterLink, RouterView, useRouter } from "vue-router"
 import { onMounted, onUnmounted, ref } from "vue"
 import {
+  BarChart3,
   Bot,
   Bell,
   LayoutDashboard,
@@ -37,12 +38,14 @@ onUnmounted(() => {
   events.disconnect()
 })
 
+// 8 项导航：第 8 项「统计」为 I12 新增（偏离 doc §6.1 七项导航，用户已确认）
 const NAV_ITEMS = [
   { path: "/overview", label: "总览", icon: LayoutDashboard },
   { path: "/conversations", label: "聊天会话", icon: MessageSquare },
   { path: "/jobs", label: "岗位管理", icon: Briefcase },
   { path: "/tasks", label: "任务中心", icon: ListChecks },
   { path: "/approvals", label: "人工确认", icon: UserCheck },
+  { path: "/stats", label: "统计", icon: BarChart3 },
   { path: "/logs", label: "日志与事件", icon: ScrollText },
   { path: "/settings", label: "设置", icon: Settings },
 ]
