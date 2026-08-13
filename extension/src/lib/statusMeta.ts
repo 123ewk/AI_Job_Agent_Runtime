@@ -43,3 +43,15 @@ const META: Record<StatusValue, StatusMeta> = {
 export function statusMeta(status: StatusValue): StatusMeta {
   return META[status] ?? { label: status, color: "var(--color-text-secondary)" }
 }
+
+// 会话状态（conversation.status：active / waiting_hr / closed）→ 展示元数据。
+// 与三态映射分开：会话状态值域不同，复用 StatusValue 会引入无关状态，故独立函数 + 零信任兜底。
+const CONV_STATUS_META: Record<string, { label: string; color: string }> = {
+  active: { label: "进行中", color: "var(--color-success)" },
+  waiting_hr: { label: "等待HR", color: "var(--color-warning)" },
+  closed: { label: "已关闭", color: "var(--color-text-secondary)" },
+}
+
+export function conversationStatusMeta(status: string): { label: string; color: string } {
+  return CONV_STATUS_META[status] ?? { label: status, color: "var(--color-text-secondary)" }
+}
