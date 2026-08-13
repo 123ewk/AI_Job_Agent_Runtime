@@ -45,7 +45,13 @@ from app.schema.job import (
     JobUpdate,
 )
 from app.schema.memory import MemoryCreate, MemoryResponse, MemorySearchRequest
-from app.schema.resume import ResumeCreate, ResumeResponse, ResumeSummaryResponse, ResumeUpdate
+from app.schema.resume import (
+    ResumeCreate,
+    ResumeDetailResponse,
+    ResumeResponse,
+    ResumeSummaryResponse,
+    ResumeUpdate,
+)
 from app.schema.setting import (
     AgentConfigResponse,
     AgentConfigUpdate,
@@ -125,6 +131,7 @@ __all__ = [
     "ResumeCreate",
     "ResumeUpdate",
     "ResumeResponse",
+    "ResumeDetailResponse",
     "ResumeSummaryResponse",
     # Memory
     "MemoryCreate",

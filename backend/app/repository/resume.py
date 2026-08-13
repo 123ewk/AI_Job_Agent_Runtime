@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, update
 
 from app.models.resume import Resume
 from app.repository.base import BaseRepository
@@ -25,6 +25,18 @@ class ResumeRepository(BaseRepository[Resume]):
             )
         )
         return result.scalar_one_or_none()
+
+    async def clear_default(self, user_id: int) -> None:
+        """清除用户所有简历的默认标记。
+
+        设默认前置操作：先清空再置顶，保证同一时刻至多一份默认简历。
+        用单条 UPDATE 而非逐行 update，避免 N 次往返。
+        """
+        await self.session.execute(
+            update(Resume)
+            .where(and_(Resume.user_id == user_id, Resume.is_default.is_(True)))  # type: ignore[attr-defined]
+            .values(is_default=False)
+        )
 
     async def list_by_user(self, user_id: int, limit: int = 20) -> list[Resume]:
         """列出用户所有简历（含已归档）。"""

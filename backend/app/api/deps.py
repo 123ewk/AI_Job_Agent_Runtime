@@ -14,7 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.db.base import get_session_factory
-from app.service import ApprovalService, ConversationService, MemoryService, SettingsService, TaskService
+from app.service import (
+    ApprovalService,
+    ConversationService,
+    MemoryService,
+    ResumeService,
+    SettingsService,
+    TaskService,
+)
 from app.service.job import JobService
 
 
@@ -64,6 +71,10 @@ def get_job_service(db: DBSessionDep) -> JobService:
     return JobService(db)
 
 
+def get_resume_service(db: DBSessionDep) -> ResumeService:
+    return ResumeService(db)
+
+
 # Service 依赖类型别名
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 ApprovalServiceDep = Annotated[ApprovalService, Depends(get_approval_service)]
@@ -71,6 +82,7 @@ MemoryServiceDep = Annotated[MemoryService, Depends(get_memory_service)]
 ConversationServiceDep = Annotated[ConversationService, Depends(get_conversation_service)]
 SettingsServiceDep = Annotated[SettingsService, Depends(get_settings_service)]
 JobServiceDep = Annotated[JobService, Depends(get_job_service)]
+ResumeServiceDep = Annotated[ResumeService, Depends(get_resume_service)]
 
 
 async def get_current_user_id() -> int:

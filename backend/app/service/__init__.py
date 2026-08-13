@@ -20,6 +20,7 @@ from app.service.approval import ApprovalService
 from app.service.conversation import ConversationService
 from app.service.job import JobService
 from app.service.memory import MemoryService
+from app.service.resume import ResumeService
 from app.service.setting import SettingsService
 from app.service.task import TaskService
 
@@ -28,6 +29,7 @@ __all__ = [
     "ConversationService",
     "JobService",
     "MemoryService",
+    "ResumeService",
     "SettingsService",
     "TaskService",
 ]
