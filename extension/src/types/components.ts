@@ -18,7 +18,7 @@ export interface Toast {
  */
 export type AgentRunState = "idle" | "planning" | "executing" | "waiting_human" | "recovering" | "done"
 export type MonitoringState = "idle" | "monitoring" | "paused" | "stopped"
-export type TaskStatus = "running" | "waiting_approval" | "recovering" | "succeeded" | "failed" | "canceled"
+export type TaskStatus = "pending" | "running" | "waiting_approval" | "recovering" | "succeeded" | "failed" | "canceled"
 export type WsState = "connected" | "reconnecting" | "disconnected"
 
 /** StatusBadge 可接收的任意状态值（并集，便于按 §4.3 映射） */

@@ -28,6 +28,7 @@ const META: Record<StatusValue, StatusMeta> = {
   paused: { label: "已暂停", color: "var(--color-warning)" },
   stopped: { label: "已停止", color: "var(--color-danger)" },
   // task.status
+  pending: { label: "等待中", color: "var(--color-info)" },
   running: { label: "运行中", color: "var(--color-info)" },
   waiting_approval: { label: "待确认", color: "var(--color-warning)" },
   succeeded: { label: "成功", color: "var(--color-success)" },
