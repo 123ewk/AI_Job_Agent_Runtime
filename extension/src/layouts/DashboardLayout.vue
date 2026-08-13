@@ -3,7 +3,7 @@
 // 结构：Header(64px 深蓝) + Sidebar(220px 深色) + <router-view> 主内容。
 // 职责：页面骨架 + 导航状态；Agent 状态/自动模式等由 store 驱动（I3 起接线）。
 import { RouterLink, RouterView, useRouter } from "vue-router"
-import { onMounted, ref } from "vue"
+import { onMounted, onUnmounted, ref } from "vue"
 import {
   Bot,
   Bell,
@@ -21,12 +21,20 @@ import StatusBadge from "../components/common/StatusBadge.vue"
 import ConnectIndicator from "../components/common/ConnectIndicator.vue"
 import TodayStats from "../dashboard/TodayStats.vue"
 import { useConnectionStore } from "../stores/connection"
+import { useEventStore } from "../stores/events"
 
 const connection = useConnectionStore()
+const events = useEventStore()
 
 onMounted(() => {
   // 布局级探活：保证任意子页打开时侧栏连接状态正确（文档 §16）
   void connection.checkHealth()
+  // 布局级 WS：全局单一事件连接，Overview 实时事件 / 日志页共享（I10）
+  events.connect()
+})
+
+onUnmounted(() => {
+  events.disconnect()
 })
 
 const NAV_ITEMS = [

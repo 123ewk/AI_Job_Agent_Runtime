@@ -1,22 +1,22 @@
 <script setup lang="ts">
 // 实时事件（设计权威：前端布局 V1.0 §10，样式规范 §24-§26）。
 // Timeline：时间胶囊 + 事件标题 + 描述 + 等级色圆点。右上「清空」。
-// 数据：事件结构见 V1.0 §52（event_id/event_type/timestamp/...），当前空态，
-//       Phase 2 由 WS 事件流驱动（后端 WS 为 stub）。
+// 数据：event store（Dashboard 布局 onMounted 统一 connect，全局共享同一 WS 连接，I10）。
 import EmptyState from "../components/common/EmptyState.vue"
+import EventTimeline from "../components/common/EventTimeline.vue"
+import { useEventStore } from "../stores/events"
 
-// 事件等级 → 色点（样式规范 §26）
-// 占位空态：Phase 2 由 WS 事件流驱动
-const empty = true
+const store = useEventStore()
 </script>
 
 <template>
   <section class="events card">
     <header class="card-head">
       <h3 class="card-title">实时事件</h3>
-      <button type="button" class="clear-btn" :disabled="empty">清空</button>
+      <button type="button" class="clear-btn" :disabled="!store.events.length" @click="store.clear()">清空</button>
     </header>
-    <EmptyState v-if="empty" title="暂无实时事件" hint="Agent 执行操作时事件将实时显示在这里" />
+    <EmptyState v-if="!store.events.length" title="暂无实时事件" hint="Agent 执行操作时事件将实时显示在这里" />
+    <EventTimeline v-else :events="store.events" :limit="6" />
   </section>
 </template>
 
