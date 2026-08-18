@@ -5,7 +5,7 @@
 ## 目录结构
 
 ```
-skills/boss-extract-jobs/
+backend/app/agent/skills/boss-extract-jobs/
 ├── __init__.py        # 包导出（BossExtractService / SkillResult / JobRules）
 ├── SKILL.md           # doc 08 Skill 契约（目标/输入/输出/Prompt/Tool 需求/Recovery/接线）
 ├── extract-jobs.js    # 浏览器提取脚本（MAIN world，注入用，<10000 字符）
@@ -35,11 +35,11 @@ skills/boss-extract-jobs/
 ## 独立运行测试
 
 ```bash
-# 从仓库根
-python -m pytest skills/boss-extract-jobs/tests -v
+# 从仓库根（用 backend venv 跑，与 backend 测试同一解释器）
+backend/.venv/Scripts/python.exe -m pytest backend/app/agent/skills/boss-extract-jobs/tests -v
 
 # 或进目录独立跑（conftest 自动注入 sys.path）
-cd skills/boss-extract-jobs && python -m pytest tests -v
+cd backend/app/agent/skills/boss-extract-jobs && python -m pytest tests -v
 ```
 
 ## 快速试跑（不连浏览器）
@@ -47,11 +47,15 @@ cd skills/boss-extract-jobs && python -m pytest tests -v
 ```python
 import asyncio
 
-# 目录名含连字符，不能直接 import skills.boss_extract_jobs —— 用 importlib 或进目录顶层导入
-import importlib
+# 目录名含连字符，不能直接 import（含 app.agent.skills.boss_extract_jobs 点号路径）。
+# 未接线时：进技能目录顶层导入（conftest 注入 sys.path），或 importlib 用文件系统路径动态加载。
+# 正式接线时：将目录重命名为合法包名 boss_extract_jobs，即可 `from app.agent.skills.boss_extract_jobs import ...`。
+import sys
+from pathlib import Path
 
-BossExtractService = importlib.import_module("skills.boss-extract-jobs.service").BossExtractService
-JobRules = importlib.import_module("skills.boss-extract-jobs.job_fit").JobRules
+sys.path.insert(0, str(Path("backend/app/agent/skills/boss-extract-jobs").resolve()))
+from job_fit import JobRules  # noqa: E402
+from service import BossExtractService  # noqa: E402
 
 
 async def main():

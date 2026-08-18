@@ -97,12 +97,10 @@
 
 ```python
 # 未来：skill_router.map_goal_to_skill("提取岗位") -> boss.extract_jobs
-# 目录名含连字符，直接 `import skills.boss_extract_jobs` 是语法错误；
-# 打包/接线时建议把目录重命名为合法包名 boss_extract_jobs，届时可常规 import。
-import importlib
-
-BossExtractService = importlib.import_module("skills.boss-extract-jobs.service").BossExtractService
-JobRules = importlib.import_module("skills.boss-extract-jobs.job_fit").JobRules
+# 目录名含连字符，不能直接 `import app.agent.skills.boss_extract_jobs`（语法错误）；
+# 打包/接线时建议把目录重命名为合法包名 boss_extract_jobs，
+# 届时可 `from app.agent.skills.boss_extract_jobs import BossExtractService, JobRules`。
+# 未接线独立运行：进技能目录顶层导入（tests/conftest.py 已注入 sys.path）。
 from backend.app.service.browser_tools import BrowserToolAdapter
 from backend.app.service.job import JobService
 from backend.app.service.setting import SettingsService

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from job_fit import JobRules, evaluate, parse_salary_desc
 
 

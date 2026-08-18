@@ -1,4 +1,4 @@
-# ruff: noqa: N999  # 目录名含连字符（boss-extract-jobs）为刻意设计，见 README「接线路径」
+# 目录名含连字符（boss-extract-jobs）为刻意设计，见 README「接线路径」
 """boss-extract-jobs：Boss 直聘岗位提取垂直工具（提取 → 筛选 → 落库）。
 
 技能目录说明：skills/ 集中存放未来 agent（doc 06 LangGraph skill_router）可编排的
