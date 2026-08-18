@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    browser,
     conversations,
     health,
     jobs,
@@ -28,3 +29,4 @@ api_router.include_router(resume.router)
 api_router.include_router(conversations.router)
 api_router.include_router(tasks.router)
 api_router.include_router(memory.router)
+api_router.include_router(browser.router)

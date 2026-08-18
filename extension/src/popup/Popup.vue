@@ -3,16 +3,105 @@
 // 结构：Agent 状态 + 自动回复/自动投递/后台监听 3 开关 + 当前任务 + 打开控制台/立即同步。
 // 3 开关写 chrome.storage.local（跨上下文同步，background 消费）；不复制完整 Dashboard（§34）。
 // 额外保留「打开 SidePanel」入口：default_popup 使 action.onClicked 不触发，只能由 popup 用户手势打开。
-import { onMounted, ref } from "vue"
-import { Bot, PanelRight, RefreshCw } from "lucide-vue-next"
+import { onMounted, onUnmounted, ref } from "vue"
+import { Bot, ClipboardCopy, PanelRight, Plug, RefreshCw } from "lucide-vue-next"
 import StatusBadge from "../components/common/StatusBadge.vue"
 import { useAgentStore } from "../stores/agent"
 import { useConnectionStore } from "../stores/connection"
 import { useUiStore } from "../stores/ui"
+import { apiGet } from "../lib/api"
 
 const agent = useAgentStore()
 const connection = useConnectionStore()
 const ui = useUiStore()
+
+// ---------------------------------------------------------------------------
+// 浏览器桥（Chrome MCP Server /ws 通道）状态 —— 对齐 17-ChromeMCPServer落地选型
+// background/bridge/websocketClient.ts 持有真实连接，popup 经 runtime 消息查询/控制。
+// ---------------------------------------------------------------------------
+type BridgeState = "connected" | "reconnecting" | "disconnected" | "no_token"
+
+const bridgeState = ref<BridgeState>("disconnected")
+const bridgeToken = ref("")
+
+async function refreshBridgeState(): Promise<void> {
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "getBridgeState" })
+    bridgeState.value = !resp?.hasToken
+      ? "no_token"
+      : resp?.connected
+        ? "connected"
+        : "reconnecting"
+  } catch {
+    bridgeState.value = "disconnected"
+  }
+}
+
+async function loadBridgeToken(): Promise<void> {
+  const { browser_mcp_token } = await chrome.storage.local.get("browser_mcp_token")
+  bridgeToken.value = (browser_mcp_token as string | undefined) ?? ""
+}
+
+function saveBridgeToken(): void {
+  void chrome.runtime.sendMessage({ type: "setBridgeToken", token: bridgeToken.value.trim() })
+  ui.pushToast("success", "浏览器桥令牌已保存")
+}
+
+/**
+ * 一键获取令牌：调后端 GET /api/v1/browser/token（与 mcp-server 同源 secrets 文件），
+ * 自动填入输入框并保存。免除手动复制粘贴。
+ */
+async function fetchBridgeToken(): Promise<void> {
+  try {
+    const data = await apiGet<{ token: string }>("/browser/token")
+    if (!data.token) {
+      ui.pushToast("error", "后端未读到令牌：先启动 mcp-server 或配置 BROWSER_MCP_TOKEN")
+      return
+    }
+    bridgeToken.value = data.token
+    void chrome.runtime.sendMessage({ type: "setBridgeToken", token: data.token })
+    ui.pushToast("success", "已自动获取并保存令牌")
+    await refreshBridgeState()
+  } catch (err) {
+    ui.pushToast("error", `获取令牌失败：${err instanceof Error ? err.message : String(err)}（后端在跑吗？）`)
+  }
+}
+
+function reconnectBridge(): void {
+  void chrome.runtime.sendMessage({ type: "bridgeConnect" })
+  void refreshBridgeState()
+}
+
+const BRIDGE_STATE_LABEL: Record<BridgeState, string> = {
+  connected: "已连接",
+  reconnecting: "连接中…",
+  disconnected: "未连接",
+  no_token: "未配置令牌",
+}
+
+// 监听 background 广播的状态变更（bridge/websocketClient broadcastState）
+const onBridgeBroadcast = (message: unknown): void => {
+  const msg = message as { type?: string; payload?: { connected?: boolean; hasToken?: boolean } }
+  if (msg?.type === "BRIDGE_STATE_CHANGED") {
+    bridgeState.value = !msg.payload?.hasToken
+      ? "no_token"
+      : msg.payload?.connected
+        ? "connected"
+        : "reconnecting"
+  }
+}
+
+onMounted(async () => {
+  await loadBridgeToken()
+  await refreshBridgeState()
+  const stored = await chrome.storage.local.get(PREFS_KEY)
+  prefs.value = { ...prefs.value, ...(stored[PREFS_KEY] as Partial<PopupPrefs> | undefined) }
+  chrome.runtime.onMessage.addListener(onBridgeBroadcast)
+})
+
+onUnmounted(() => {
+  chrome.runtime.onMessage.removeListener(onBridgeBroadcast)
+})
 
 /** 3 开关的持久化偏好（写 chrome.storage.local，key 独立于 app_settings） */
 interface PopupPrefs {
@@ -105,6 +194,34 @@ async function syncNow(): Promise<void> {
           @click="toggle(item.key)"
         >
           <span class="knob" />
+        </button>
+      </div>
+    </div>
+
+    <!-- 浏览器桥（Chrome MCP Server /ws 通道） -->
+    <div class="bridge-card">
+      <div class="bridge-head">
+        <span class="bridge-title"><Plug :size="14" /> 浏览器桥</span>
+        <span class="bridge-state" :class="bridgeState">
+          <span class="dot" />{{ BRIDGE_STATE_LABEL[bridgeState] }}
+        </span>
+      </div>
+      <div class="bridge-token">
+        <input
+          v-model="bridgeToken"
+          type="text"
+          spellcheck="false"
+          placeholder="粘贴 mcp-server token（node mcp-server/token.js --print）"
+          class="token-input"
+        />
+        <button type="button" class="mini-btn" title="从后端自动获取令牌（需后端运行中）" @click="fetchBridgeToken">
+          <ClipboardCopy :size="13" /> 获取
+        </button>
+        <button type="button" class="mini-btn" :disabled="!bridgeToken.trim()" @click="saveBridgeToken">
+          保存
+        </button>
+        <button type="button" class="mini-btn" :disabled="bridgeState === 'connected'" @click="reconnectBridge">
+          重连
         </button>
       </div>
     </div>
@@ -226,6 +343,111 @@ async function syncNow(): Promise<void> {
 
 .switch.on .knob {
   transform: translateX(20px);
+}
+
+/* 浏览器桥卡片 */
+.bridge-card {
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+}
+
+.bridge-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.bridge-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-aux);
+  color: var(--color-text-secondary);
+}
+
+.bridge-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-aux);
+  color: var(--color-text-tertiary);
+}
+
+.bridge-state .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-border-strong);
+}
+
+.bridge-state.connected .dot {
+  background: var(--color-success, #22c55e);
+}
+
+.bridge-state.connected {
+  color: var(--color-success, #22c55e);
+}
+
+.bridge-state.reconnecting .dot {
+  background: #f59e0b;
+}
+
+.bridge-state.reconnecting {
+  color: #f59e0b;
+}
+
+.bridge-state.no_token .dot {
+  background: #ef4444;
+}
+
+.bridge-state.no_token {
+  color: #ef4444;
+}
+
+.bridge-token {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.token-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-page);
+  color: var(--color-text-primary);
+  font-size: var(--fs-aux);
+}
+
+.mini-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  font-size: var(--fs-aux);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mini-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.mini-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* 当前任务（§34） */

@@ -122,6 +122,25 @@ class Settings(BaseSettings):
     semantic_scorer_enabled: bool = True
     match_bm25_scale: float = 5.0
 
+    # ---------------- 浏览器桥（Chrome MCP Server） ----------------
+    # 默认关闭：未显式开启时后端完全不带浏览器能力，不影响现有功能。
+    # 通道设计见 docs/AI求职Agent_设计文档_V2.0/17-ChromeMCPServer落地选型与实现.md。
+    browser_mcp_enabled: bool = False
+    browser_mcp_host: str = "127.0.0.1"
+    browser_mcp_port: int = 12307
+    # 与 mcp-server/token.js 的令牌一致（env 优先，否则回退 ~/.browser-mcp-secrets.json）
+    browser_mcp_token: str = ""
+    # node 入口绝对路径；为空时按 "仓库根/mcp-server/index.js" 推断
+    browser_mcp_server_path: str = ""
+    # 单次工具调用超时（秒）；超时 -> 重启 server -> 重试
+    browser_mcp_timeout: float = 30.0
+    # 健康检查周期（秒）
+    browser_mcp_ping_interval: float = 30.0
+    # 工具调用 URL 域名白名单（逗号分隔；chrome_navigate / 高风险工具使用）
+    browser_mcp_url_whitelist: str = "zhipin.com"
+    # 高危工具（需 Skill 级授权 + 审计日志），逗号分隔
+    browser_mcp_risk_tools: str = "chrome_javascript,chrome_network_request"
+
     # ---------------- 派生属性 ----------------
     @property
     def database_url(self) -> str:
@@ -135,6 +154,35 @@ class Settings(BaseSettings):
             f"postgresql+asyncpg://{self.postgres_user}:{password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+
+    @property
+    def browser_mcp_url_whitelist_list(self) -> list[str]:
+        """将逗号分隔的 URL 白名单解析为列表。"""
+        return [
+            item.strip()
+            for item in self.browser_mcp_url_whitelist.split(",")
+            if item.strip()
+        ]
+
+    @property
+    def browser_mcp_risk_tools_list(self) -> list[str]:
+        """将逗号分隔的高危工具列表解析为列表。"""
+        return [
+            item.strip()
+            for item in self.browser_mcp_risk_tools.split(",")
+            if item.strip()
+        ]
+
+    @property
+    def browser_mcp_server_path_resolved(self) -> str:
+        """解析 node 入口路径。
+
+        显式配置优先；否则按本文件（backend/app/core/config.py）向上定位仓库根下的
+        mcp-server/index.js。用绝对路径避免启动 CWD 不同导致找不到。
+        """
+        if self.browser_mcp_server_path:
+            return self.browser_mcp_server_path
+        return str(_repo_root() / "mcp-server" / "index.js")
 
     @property
     def redis_url(self) -> str:

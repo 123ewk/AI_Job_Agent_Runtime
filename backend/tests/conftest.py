@@ -65,10 +65,21 @@ class MockSettings:
     debug = True
     log_level = "WARNING"
     cors_allow_origins = ""
+    cors_allow_extensions = True
     cors_allow_credentials = True
     cors_max_age_seconds = 600
     # 敏感配置加密密钥（api_key 加密用），测试环境固定值以便解密断言
     jwt_secret_key = "test-secret"  # noqa: S105 - 测试 mock 固定密钥，非真实凭据
+    # 浏览器桥：默认关闭，测试不 spawn node 子进程
+    browser_mcp_enabled = False
+    browser_mcp_host = "127.0.0.1"
+    browser_mcp_port = 12307
+    browser_mcp_token = ""
+    browser_mcp_server_path = ""
+    browser_mcp_timeout = 30.0
+    browser_mcp_ping_interval = 30.0
+    browser_mcp_url_whitelist = "zhipin.com"
+    browser_mcp_risk_tools = "chrome_javascript,chrome_network_request"
 
     @property
     def cors_origins_list(self) -> list[str]:
@@ -77,6 +88,18 @@ class MockSettings:
     @property
     def is_dev(self) -> bool:
         return False
+
+    @property
+    def browser_mcp_url_whitelist_list(self) -> list[str]:
+        return [item.strip() for item in self.browser_mcp_url_whitelist.split(",") if item.strip()]
+
+    @property
+    def browser_mcp_risk_tools_list(self) -> list[str]:
+        return [item.strip() for item in self.browser_mcp_risk_tools.split(",") if item.strip()]
+
+    @property
+    def browser_mcp_server_path_resolved(self) -> str:
+        return self.browser_mcp_server_path or ""
 
 
 # patch 必须在导入 app 模块前生效；模块级 start 保证后续 import app.* 时命中 mock

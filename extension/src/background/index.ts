@@ -15,6 +15,11 @@ import { MessageType } from "../types/messages"
 import type { RuntimeMessage, ApprovalDecisionPayload } from "../types/messages"
 import { loadSettings } from "../lib/storage"
 
+// 浏览器桥（Chrome MCP Server /ws 客户端 + 工具处理器）。
+// 顶层 import 触发模块内监听器同步注册（MV3 SW 约束），
+// 并随 SW 启动自动连接。详见 bridge/websocketClient.ts。
+import "./bridge/websocketClient"
+
 console.info("[background] service worker loaded")
 
 // ---------------------------------------------------------------------------

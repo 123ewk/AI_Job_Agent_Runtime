@@ -8,6 +8,7 @@ export enum MessageType {
   ApprovalDecided = "APPROVAL_DECIDED",
   SettingsUpdated = "SETTINGS_UPDATED",
   ChatConversationsExtracted = "CHAT_CONVERSATIONS_EXTRACTED",
+  BridgeStateChanged = "BRIDGE_STATE_CHANGED",
 }
 
 // Agent 状态机，对齐后端 TaskStatus
@@ -45,6 +46,12 @@ export interface ApprovalPayload {
 export interface ApprovalDecisionPayload {
   approvalId: string
   decision: "approved" | "rejected"
+}
+
+// 浏览器桥（Chrome MCP Server /ws）连接状态广播
+export interface BridgeStatePayload {
+  connected: boolean
+  hasToken: boolean
 }
 
 // 统一消息信封

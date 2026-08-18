@@ -8,6 +8,9 @@ const STORAGE_KEYS = {
   SETTINGS: "app_settings",
 } as const
 
+/** 浏览器桥 token 的 storage key（用户在 popup 粘贴，由 background bridge 消费）。 */
+export const BRIDGE_TOKEN_KEY = "browser_mcp_token"
+
 /**
  * 读取设置（从 chrome.storage.local）。
  * 不存在时返回 null，由调用方提供默认值。

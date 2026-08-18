@@ -1,0 +1,29 @@
+{
+  "name": "ai-job-agent-mcp-server",
+  "version": "1.0.0",
+  "description": "Chrome MCP Server for AI Job Agent — Fastify /mcp (StreamableHTTP, Bearer auth) + /ws for the Chrome extension bridge",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "ai-job-agent-mcp-server": "index.js"
+  },
+  "files": [
+    "index.js",
+    "token.js",
+    "tools.js"
+  ],
+  "scripts": {
+    "start": "node index.js",
+    "setup": "node token.js --print"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@fastify/websocket": "^11.2.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "fastify": "^5.8.4",
+    "zod": "^3.25.76"
+  },
+  "license": "MIT"
+}
