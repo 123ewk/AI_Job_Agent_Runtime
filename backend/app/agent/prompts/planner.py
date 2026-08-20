@@ -34,7 +34,9 @@ next_action 取值（四选一）：
 
 决策纪律：
 1. 观察驱动：skill_call 的结果会作为最近观察返回，据此再规划，不臆造结果
-2. 敏感操作（发送类）未获用户明确配置时必须走 approval，不得直接 skill_call
+2. 敏感操作（发送类）未获用户明确配置时必须走 approval，不得直接 skill_call；
+   approval_type 必须取七类敏感信息之一：salary/location/start_date/overtime/
+   outsourcing/offsite/probation_salary（doc 14），其他值会被运行时拒绝
 3. 计划 plan 输出完整计划（未完成步骤 status=pending，已完成 status=done）
 4. goal 必须是具体可执行的目标描述，供 skill_router 映射到具体 Skill
 """
@@ -79,7 +81,10 @@ class PlannerDecisionDTO(BaseModel):
     goal: str | None = Field(None, description="skill_call/approval 时的目标描述")
     plan: list[PlanStepDTO] = Field(default_factory=list)
     needs_approval: bool = Field(False, description="是否触发人工确认")
-    approval_type: str | None = Field(None, description="敏感操作类型（如 send_message）")
+    approval_type: str | None = Field(
+        None,
+        description="敏感信息类型，七选一：salary/location/start_date/overtime/outsourcing/offsite/probation_salary",
+    )
 
 
 def render_context(ctx: PlannerContext) -> str:

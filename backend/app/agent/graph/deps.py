@@ -59,7 +59,7 @@ class PlannerDecision:
     action: NextAction
     plan: list[dict[str, Any]] = field(default_factory=list)
     needs_approval: bool = False
-    approval_type: str | None = None  # 触发 Approval 的敏感操作类型
+    approval_type: str | None = None  # doc 14 七类敏感信息（salary/location/...）
     goal: str | None = None  # skill_call 时的目标描述（供 map_goal_to_skill）
 
 

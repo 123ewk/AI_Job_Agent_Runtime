@@ -372,6 +372,15 @@ class SettingsService(BaseService):
             "interval_seconds": current.get("monitor_interval", 60),
         }
 
+    async def get_llm_runtime_config(self, user_id: int) -> dict[str, Any]:
+        """获取 LLM 运行时配置（api_key 解密后明文）。
+
+        仅供 Agent Runtime 组装 planner 使用（进程内传递，不经 API 序列化）；
+        API 响应一律走 get_llm_config（掩码）。缺项时返回的 dict 相应键为
+        None，由调用方决定是否视为未配置。
+        """
+        return await self._get_category_as_dict(user_id, "llm")
+
     async def validate_llm_settings(self, user_id: int) -> tuple[bool, str | None]:
         """校验 LLM 配置是否可用。
 
