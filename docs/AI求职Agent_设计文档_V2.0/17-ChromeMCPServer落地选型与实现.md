@@ -155,13 +155,50 @@ doc 07 §5 的 18 个工具 → 各层实现状态：
    - **手动粘贴**：`cd mcp-server && node token.js --print`（自动复制到剪贴板）→ Ctrl+V 粘贴 →「保存」
 3. 后端：`.env` 设 `BROWSER_MCP_ENABLED=true` → 启动后端（lifespan 自动 spawn server + 健康检查）。
 4. 验证：`GET http://localhost:8000/api/v1/browser/status` → `{enabled, running, extension_connected, tools}`。
-5. 调用：ToolAdapter 未接 Agent 循环；当前可经 Skill 层直接调 `call_tool`（如 `chrome_read_page`）。
+5. Agent 接线：lifespan 装配 `SkillExecutor`（`agent/tools/router.py`）注入引擎，agent 的
+   `tool_executor` 节点经 `runtime.skills.execute` 走「例程 → 重试 → 双层兜底」链路（见 §9）。
 
 ---
 
-## 9. 后续迭代
+## 9. 例程注册表 + 双层兜底（已实现）
 
-- **例程注册表 + RoutineFallback**：`chat.send_text`（fill+Enter）、`jobs.load_next_page`（滚动）等预写例程命中即直连桥，失败再切 LLM 兜底（省 token 方案，已与用户确认方向）。
+执行顺序（用户确认的「预写 + 兜底」链路）：
+
+```
+tool_executor 节点 → SkillExecutor.execute(SkillCall)
+  ├─ 查 RoutineRegistry：命中 → RoutineRunner 逐步骤执行（确定性、无 LLM、省 token）
+  │     └─ 步骤失败 → 整条例程重试 N 次（默认 2）→ 耗尽 → 降级兜底
+  └─ 未命中 / 例程重试耗尽 → 双层兜底（browser_mcp_fallback_mode 可配置）：
+        ├─ 工具级自适应：重新 read_page + 宽松特征匹配（无 LLM）
+        └─ 仍失败且 LLM 已配置 → LLM 动态操作（ReAct ≤ 3 步，复用 planner 同款结构化输出）
+```
+
+实现落点：
+
+| 模块 | 文件 | 职责 |
+|---|---|---|
+| 例程模型/注册表 | `backend/app/agent/tools/routine.py` | `Routine` / `RoutineStep` / `TargetSpec`（稳定特征，不硬编码 ref）、`RoutineRegistry`、a11y 树解析 `parse_tree` + 特征匹配 `match_target` |
+| 例程执行器 | `backend/app/agent/tools/runner.py` | 逐步骤执行；树跨步骤复用，页面变更后重读；`_read_tree` 空树自动刷新一次 |
+| 双层兜底 | `backend/app/agent/tools/fallback.py` | `AdaptiveFallback`（无 LLM 启发式）+ `LLMFallback`（ReAct）+ `LangchainFallbackLLM`（与 planner 同款结构化输出） |
+| SkillExecutor | `backend/app/agent/tools/router.py` | `SkillExecutorLike` 实现：`map_goal_to_skill` + `execute`；浏览器锁入口统一持有 |
+| 接线 | `backend/app/main.py` `_assemble_agent_runtime` | 共享 `LockManager`；`browser_mcp_enabled` 时注入 `BrowserToolAdapter` + 兜底 LLM |
+| 配置 | `.env.example` | `BROWSER_MCP_FALLBACK_MODE=both` / `BROWSER_MCP_FALLBACK_MAX_STEPS=3` / `BROWSER_MCP_ROUTINE_RETRY=2` |
+| 测试 | `backend/tests/test_agent_routine.py` / `test_agent_skill_router.py` | 树解析/匹配、例程执行/重试、兜底升级、fallback_mode、浏览器锁 |
+
+设计要点：
+
+- **例程不硬编码 ref**：`TargetSpec{role, label_contains, label_exact, type, nth}` 是稳定特征，
+  执行时先 `chrome_read_page` 把特征解析成当前 ref（ref 跨调用持久但导航/刷新失效）。
+- **写操作不进自适应兜底**：goal 含「发送/提交/回车」时自适应兜底返回 None 升级 LLM；
+  真正的发送类写操作由预写例程 + doc 14 审批流承载（红线：不自动写）。
+- **`browser.generic` 现状**：`map_goal_to_skill` 本轮统一映射到 `browser.generic`（注册表空），
+  业务 goal → `boss.chat` / `boss.extract_jobs` 的关键词映射与预写业务例程下一轮填充。
+
+## 10. 后续迭代
+
+- **预写业务例程**：`chat.send_text`（读树→找输入框→fill→Enter）、`jobs.load_more`（滚动/翻页）等，
+  并完善 `map_goal_to_skill` 关键词 → `boss.chat` / `boss.extract_jobs` 映射；届时替换现有 Skill
+  服务中被拒的 `chrome_javascript` 注入路径。
 - **审批流接入**：`chrome_upload_file`（投递简历）接 doc 14 Approval；高危工具走 Skill 级授权 + `execution_logs` 审计落库。
 - **Boss Skill 接线**：doc 08 的 13 个 skill（`boss.send_message` / `boss.sync_messages` 等）经 Adapter 映射到工具，闭合寻岗 → 投递状态机。
 - **人工选元素**：`chrome_request_element_selection` 配前端弹层。
@@ -169,7 +206,7 @@ doc 07 §5 的 18 个工具 → 各层实现状态：
 
 ---
 
-## 10. 风险与对策
+## 11. 风险与对策
 
 - **Boss 反自动化无永久保证**：扩展 WS 桥 + MAIN world 注入「实测可用」，但可能被检测。对策：保持「只读为主 + 用户在场 + 拟人节奏」，不做批量抓取。
 - **12307 端口暴露**：仅 127.0.0.1 + Bearer token；如需更强可加 IP 白名单或 stdio shim。

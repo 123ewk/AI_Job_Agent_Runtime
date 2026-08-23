@@ -80,6 +80,9 @@ class MockSettings:
     browser_mcp_ping_interval = 30.0
     browser_mcp_url_whitelist = "zhipin.com"
     browser_mcp_risk_tools = "chrome_javascript,chrome_network_request"
+    browser_mcp_fallback_mode = "both"
+    browser_mcp_fallback_max_steps = 3
+    browser_mcp_routine_retry = 2
 
     @property
     def cors_origins_list(self) -> list[str]:

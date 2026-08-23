@@ -138,8 +138,17 @@ class Settings(BaseSettings):
     browser_mcp_ping_interval: float = 30.0
     # 工具调用 URL 域名白名单（逗号分隔；chrome_navigate / 高风险工具使用）
     browser_mcp_url_whitelist: str = "zhipin.com"
-    # 高危工具（需 Skill 级授权 + 审计日志），逗号分隔
-    browser_mcp_risk_tools: str = "chrome_javascript,chrome_network_request"
+    # 高危工具（需 Skill 级授权 + 审计日志），逗号分隔。
+    # chrome_javascript 于 2026-08-23 用户拍板放行（净化自本名单）：主体两种
+    # Boss 技能（boss_extract_jobs/boss_chat）主路径均依赖 chrome_javascript 注入。
+    # 仍保留非只读、可签发任意流量的 chrome_network_request 为高危待授权。
+    browser_mcp_risk_tools: str = "chrome_network_request"
+    # 例程重试耗尽后的兜底模式：adaptive(无LLM启发式) | llm | both | off
+    browser_mcp_fallback_mode: str = "both"
+    # LLM 兜底最大决策步数（ReAct 循环上限，控制 token 预算）
+    browser_mcp_fallback_max_steps: int = 3
+    # 预写例程失败后的整条例程重试次数（页面变化 ref 失效 -> 重读树重新匹配）
+    browser_mcp_routine_retry: int = 2
 
     # ---------------- 派生属性 ----------------
     @property

@@ -20,8 +20,12 @@ from starlette.requests import Request
 from app import __version__
 from app.agent.runtime.checkpoint_store import CheckpointStore
 from app.agent.runtime.engine_registry import clear_runtime_engine, set_runtime_engine
+from app.agent.runtime.lock_manager import LockManager
 from app.agent.runtime.queue_consumer import QueueConsumer
 from app.agent.runtime.workflow_engine import WorkflowEngine, create_planner_from_settings
+from app.agent.tools.fallback import create_fallback_llm_from_settings
+from app.agent.tools.router import SkillExecutor
+from app.agent.tools.routine import RoutineRegistry
 from app.api.v1.router import api_router
 from app.api.ws import ws_router
 from app.core.config import get_settings
@@ -31,6 +35,7 @@ from app.db.base import dispose_engine, get_session_factory
 from app.infra.browser_mcp import get_browser_mcp
 from app.infra.queue import get_queue_client
 from app.schema.common import ErrorResponse
+from app.service.browser_tools import BrowserToolAdapter
 
 settings = get_settings()
 
@@ -60,15 +65,36 @@ async def _assemble_agent_runtime(app: FastAPI) -> _AgentRuntime:
     （读用户 LLM 配置）-> WorkflowEngine（编译图，checkpointer=store.checkpointer）
     -> QueueConsumer -> 后台 run_forever 任务。
 
+    SkillExecutor 接线（doc 17 例程 + 兜底）：共享 LockManager 给引擎（执行锁）
+    与 SkillExecutor（浏览器锁，doc 04 §8.4）；浏览器桥启用时注入真实 adapter，
+    未启用时注入 None（SkillExecutor 返回「未启用」错误，不崩）。
+
     失败兜底：任一步失败（LLM 未配置 / DB/Redis 暂不可达）直接上抛，由 lifespan
     捕获并跳过 agent 执行能力——HTTP API 主体仍正常启动，不因编排层故障拖垮服务。
     """
     store = CheckpointStore()
     await store.setup()  # 建 checkpoint 表（幂等）；DB 不可达在此抛
+    locks = LockManager()
     planner = await create_planner_from_settings(
         get_session_factory(), user_id=_DEFAULT_USER_ID
     )
-    engine = WorkflowEngine(planner, checkpointer=store.checkpointer)
+    if settings.browser_mcp_enabled:
+        browser_mcp = await get_browser_mcp(settings)
+        adapter = BrowserToolAdapter(client=browser_mcp, settings=settings)
+        # LLM 兜底从用户 Settings.llm 装配（未配置返回 None -> 兜底自动降级为 adaptive）
+        fallback_llm = await create_fallback_llm_from_settings(
+            get_session_factory(), user_id=_DEFAULT_USER_ID
+        )
+        skills = SkillExecutor(
+            adapter=adapter,
+            registry=RoutineRegistry(),
+            locks=locks,
+            fallback_llm=fallback_llm,
+            settings=settings,
+        )
+    else:
+        skills = SkillExecutor(adapter=None, locks=locks, settings=settings)
+    engine = WorkflowEngine(planner, skills=skills, checkpointer=store.checkpointer, locks=locks)
     app.state.agent_engine = engine  # 供 WS 等触达同一引擎实例
     set_runtime_engine(engine)  # ApprovalService 经 service-locator 触达同引擎续跑
     queue = get_queue_client()
