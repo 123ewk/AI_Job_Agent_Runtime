@@ -235,6 +235,19 @@ class WorkflowEngine:
             raise
         return await self._finish_or_suspend(current.db_id, result)
 
+    async def resume_by_task(self, task_id: int, decision: str) -> dict[str, Any]:
+        """按任务 ID 恢复（Approval 决策入口扩展）。
+
+        审批侧只有 task_id，不便去 DB 反查 thread_id；引擎自身持有挂起态
+        （_current_task），据此校验并续跑。V1 单挂起任务：若当前挂起的不是该任务
+        则抛 EngineStateError（调用方降级，不抢占别的挂起任务）。
+        """
+        current = self._current_task
+        if current is None or current.db_id != task_id:
+            msg = f"resume_by_task({task_id}) rejected: engine not suspended on task {getattr(current, 'db_id', None)}"
+            raise EngineStateError(msg)
+        return await self.resume(current.thread_id, decision)
+
     async def _finish_or_suspend(self, task_db_id: int, result: dict[str, Any]) -> dict[str, Any]:
         """收尾分流：挂起（保锁）或终态（写状态 + 释放锁）。"""
         if "__interrupt__" in result:

@@ -19,6 +19,7 @@ from starlette.requests import Request
 
 from app import __version__
 from app.agent.runtime.checkpoint_store import CheckpointStore
+from app.agent.runtime.engine_registry import clear_runtime_engine, set_runtime_engine
 from app.agent.runtime.queue_consumer import QueueConsumer
 from app.agent.runtime.workflow_engine import WorkflowEngine, create_planner_from_settings
 from app.api.v1.router import api_router
@@ -68,7 +69,8 @@ async def _assemble_agent_runtime(app: FastAPI) -> _AgentRuntime:
         get_session_factory(), user_id=_DEFAULT_USER_ID
     )
     engine = WorkflowEngine(planner, checkpointer=store.checkpointer)
-    app.state.agent_engine = engine  # 供 approval resume / WS 等触达同一引擎实例
+    app.state.agent_engine = engine  # 供 WS 等触达同一引擎实例
+    set_runtime_engine(engine)  # ApprovalService 经 service-locator 触达同引擎续跑
     queue = get_queue_client()
     await queue.ensure_consumer_groups()
     consumer = QueueConsumer(engine, queue=queue)
@@ -119,6 +121,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
             with suppress(asyncio.CancelledError):
                 await runtime.consumer_task
             await runtime.store.aclose()
+            clear_runtime_engine()
         if settings.browser_mcp_enabled:
             await browser_mcp.stop()
         await dispose_engine()

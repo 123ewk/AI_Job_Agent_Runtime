@@ -182,6 +182,47 @@ async def test_resume_without_suspension_rejected() -> None:
         await engine.resume(str(uuid4()), "approve")
 
 
+async def test_resume_by_task_approves_suspended_task() -> None:
+    """审批入口按任务 ID 恢复：引擎持挂起态即续跑至终态并释放锁。"""
+    llm = FakeLLM(
+        [
+            PlannerDecision(action="skill_call", goal="回复期望薪资", needs_approval=True, approval_type="salary"),
+            PlannerDecision(action="end"),
+        ]
+    )
+    engine = FakeEngine(llm)
+
+    result = await engine.run("7")
+    assert "__interrupt__" in result
+    assert engine.locks.execution_locked
+
+    result2 = await engine.resume_by_task(7, "approve")
+
+    assert result2["terminal"] == "succeeded"
+    assert not engine.locks.execution_locked
+
+
+async def test_resume_by_task_wrong_task_rejected() -> None:
+    """挂起在任务 A 时错误恢复任务 B：拒绝，不抢占挂起的 A。"""
+    llm = FakeLLM(
+        [PlannerDecision(action="skill_call", goal="回复期望薪资", needs_approval=True, approval_type="salary")]
+    )
+    engine = FakeEngine(llm)
+    await engine.run("7")
+    assert engine.locks.execution_locked  # 已挂起
+
+    with pytest.raises(EngineStateError):
+        await engine.resume_by_task(999, "approve")
+    assert engine.locks.execution_locked  # 拒绝不影响原挂起任务持锁
+
+
+async def test_resume_by_task_without_suspension_rejected() -> None:
+    """引擎未挂起任何任务时按任务恢复属误用：拒绝。"""
+    engine = FakeEngine(FakeLLM([]))
+    with pytest.raises(EngineStateError):
+        await engine.resume_by_task(7, "approve")
+
+
 async def test_unknown_approval_type_fails_fast_and_aborts() -> None:
     """planner 输出 doc 14 之外的审批类型：ValueError -> 任务 failed + 释放锁。"""
     llm = FakeLLM(

@@ -13,11 +13,13 @@ Approval 是 Agent 执行中的人工确认中断点，属 Runtime 层。
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.runtime.engine_registry import get_runtime_engine
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 from app.models.approval import Approval as ApprovalModel
 from app.models.approval import ApprovalStatus
@@ -26,6 +28,8 @@ from app.repository.approval import ApprovalRepository
 from app.schema.enums import ApprovalType
 from app.schema.task import ApprovalResponse
 from app.service.base import BaseService, transactional
+
+logger = logging.getLogger(__name__)
 
 # 存储活跃的定时器任务引用，防止 asyncio.create_task 创建的任务被 GC
 # weakref 方案更优，但模块级集合对于生命周期短的任务已足够
@@ -349,16 +353,17 @@ class ApprovalService(BaseService):
         )
 
     async def _resume_task(self, task_id: int, approval_id: int, decision: str) -> None:
-        """恢复任务执行。
+        """恢复任务执行（审批决策 -> engine.resume 续跑）。
 
-        1. 获取 task_id 与 thread_id
-        2. WorkflowEngine.reload_checkpoint(thread_id)
-        3. 注入 decision 到 State
-        4. Task 状态 -> running
-        5. 推送 WS task.updated 事件
+        经 engine_registry 取进程内引擎单例：审批 handler 无 request 上下文，
+        引擎在 lifespan 装配并注册，此处经 service-locator 触达同一实例续跑，
+        保证挂起态与执行锁在同实例上（跨实例 resume 会因不持挂起态被拒）。
 
-        注意：此方法在事务内部调用，@transactional 保证状态变更原子性。
-        TODO: 待 WorkflowEngine 实现后补充完整逻辑
+        **不在此 await 图执行**：本方法跑在 @transactional 审批事务内，若内联等待
+        分钟级续跑会长期占住连接池连接。改为后台 asyncio task 派发，审批事务先
+        提交，续跑在事务外独立推进（状态由引擎自身 DB 会话写，与审批解耦）。
+
+        Note: WS 推送 task.updated 由引擎/消费侧后续接线补（当前未接 WS hub）。
         """
         self.log_with_context(
             20,
@@ -368,8 +373,23 @@ class ApprovalService(BaseService):
             decision=decision,
         )
 
-        # TODO: 注入 WorkflowEngine 并 reload checkpoint
-        # TODO: 注入 decision 到 LangGraph State
-        # TODO: 调用 TaskService.update_status 改为 running
+        engine = get_runtime_engine()
+        if engine is None:
+            # 引擎未装配（LLM 未配置/启动被跳过/已关闭）：无法续跑，记录告警不抛错。
+            # 任务留在 waiting_approval；恢复它取决于配置修复后重启（V1 挂起态在进程内）。
+            self.log_with_context(40, "task_resume_skipped_no_engine", task_id=task_id)
+            return
 
-        # 临时占位：日志记录即可
+        async def _run_resume() -> None:
+            # V1 单挂起任务：resume_by_task 校验引擎确实挂起在该任务上，错配抛
+            # EngineStateError 由下方回调记录，不抢占别的挂起任务。
+            await engine.resume_by_task(task_id, decision)
+
+        def _on_resume_done(fut: asyncio.Task[None]) -> None:
+            try:
+                fut.result()  # 触发异常并记录；成功则无操作
+            except Exception:
+                logger.exception("Approval resume failed", extra={"task_id": task_id, "decision": decision})
+
+        task = asyncio.create_task(_run_resume())
+        task.add_done_callback(_on_resume_done)
