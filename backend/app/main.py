@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI
@@ -16,25 +18,71 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
 from app import __version__
+from app.agent.runtime.checkpoint_store import CheckpointStore
+from app.agent.runtime.queue_consumer import QueueConsumer
+from app.agent.runtime.workflow_engine import WorkflowEngine, create_planner_from_settings
 from app.api.v1.router import api_router
 from app.api.ws import ws_router
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.logging import configure_logging, get_logger
-from app.db.base import dispose_engine
+from app.db.base import dispose_engine, get_session_factory
 from app.infra.browser_mcp import get_browser_mcp
+from app.infra.queue import get_queue_client
 from app.schema.common import ErrorResponse
 
 settings = get_settings()
+
+# V1 单用户模式：未接 JWT，全程固定 user_id=1（对齐 api/deps.get_current_user_id）
+_DEFAULT_USER_ID = 1
+
+
+@dataclass
+class _AgentRuntime:
+    """装配好的 agent 运行时（lifespan 持有，关闭期回收）。
+
+    - ``engine``：WorkflowEngine 单例（含执行锁与挂起态），挂到 app.state.agent_engine，
+      供 ApprovalService._resume_task 等经同一实例续跑。
+    - ``store``：CheckpointStore，长存活存档器连接随应用生命周期开合。
+    - ``consumer_task``：后台消费循环任务，关闭期 cancel 并回收。
+    """
+
+    engine: WorkflowEngine
+    store: CheckpointStore
+    consumer_task: asyncio.Task[Any]
+
+
+async def _assemble_agent_runtime(app: FastAPI) -> _AgentRuntime:
+    """装配 agent 引擎单例并启动后台消费循环（lifespan 启动期调用）。
+
+    依赖链：CheckpointStore（持 AsyncPostgresSaver + 业务索引）-> create_planner
+    （读用户 LLM 配置）-> WorkflowEngine（编译图，checkpointer=store.checkpointer）
+    -> QueueConsumer -> 后台 run_forever 任务。
+
+    失败兜底：任一步失败（LLM 未配置 / DB/Redis 暂不可达）直接上抛，由 lifespan
+    捕获并跳过 agent 执行能力——HTTP API 主体仍正常启动，不因编排层故障拖垮服务。
+    """
+    store = CheckpointStore()
+    await store.setup()  # 建 checkpoint 表（幂等）；DB 不可达在此抛
+    planner = await create_planner_from_settings(
+        get_session_factory(), user_id=_DEFAULT_USER_ID
+    )
+    engine = WorkflowEngine(planner, checkpointer=store.checkpointer)
+    app.state.agent_engine = engine  # 供 approval resume / WS 等触达同一引擎实例
+    queue = get_queue_client()
+    await queue.ensure_consumer_groups()
+    consumer = QueueConsumer(engine, queue=queue)
+    consumer_task = asyncio.create_task(consumer.run_forever(), name="queue-consumer")
+    return _AgentRuntime(engine=engine, store=store, consumer_task=consumer_task)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     """应用生命周期。
 
-    启动期：配置结构化日志；若开启浏览器桥（BROWSER_MCP_ENABLED=true），
-    以子进程拉起 Chrome MCP Server 并启动健康检查循环（doc 07 §4）。
-    关闭期：停止浏览器桥子进程；释放数据库连接池，避免连接泄漏。
+    启动期：配置结构化日志；装 agent 引擎（CheckpointStore + planner + 消费循环）；
+    若开启浏览器桥则拉起 Chrome MCP Server。关闭期：停消费任务、关存档器连接、
+    停浏览器桥、释放数据库连接池。
     """
     configure_logging(settings.log_level, json_render=not settings.is_dev)
     logger = get_logger("app.lifecycle")
@@ -45,6 +93,13 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         version=__version__,
         browser_mcp_enabled=settings.browser_mcp_enabled,
     )
+
+    runtime: _AgentRuntime | None = None
+    try:
+        runtime = await _assemble_agent_runtime(_app)
+    except Exception:
+        # 编排层装配失败不阻断 API 服务：记录原因，仅剩 HTTP 路由可用（agent 不跑）
+        logger.exception("Agent runtime 装配失败，跳过 agent 执行能力（API 仍可用）")
 
     browser_mcp = await get_browser_mcp(settings)
     if settings.browser_mcp_enabled:
@@ -57,6 +112,13 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         yield
     finally:
         logger.info("应用关闭，释放资源")
+        if runtime is not None:
+            # 停消费循环并回收任务，避免 "Task was destroyed but it is pending" 告警
+            runtime.consumer_task.cancel()
+            # 回收任务避免 "Task was destroyed but it is pending" 告警
+            with suppress(asyncio.CancelledError):
+                await runtime.consumer_task
+            await runtime.store.aclose()
         if settings.browser_mcp_enabled:
             await browser_mcp.stop()
         await dispose_engine()
