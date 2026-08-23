@@ -25,9 +25,11 @@ from uuid import UUID
 
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.db.base import get_session_factory
+from app.repository.task import TaskRepository
 from app.schema.task import TaskStatus
-from app.service.task import TaskService
 
 from .redis import get_redis_client
 
@@ -41,6 +43,8 @@ PRIORITY_ORDER = ["P0", "P1", "P2", "P3"]  # 消费优先级（高 -> 低）
 MAX_RETRY_COUNT = 2  # 对齐 tasks.max_retries = 2
 STALLED_TIMEOUT_MS = 30 * 1000  # 30s 未 ACK 判定为 stalled
 CONSUME_BLOCK_MS = 1000  # 单次 XREADGROUP 阻塞时长
+# 幂等性检查用的终态集合（frozenset 一次性固定，避免每次调用重建 set）
+_TERMINAL_STATUSES = frozenset({TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELED})
 
 
 class QueueMessage:
@@ -52,17 +56,17 @@ class QueueMessage:
 
     def __init__(
         self,
-        task_id: UUID,
+        task_id: str,  # DB 任务主键（int PK）序列化串；与 engine.run 的 str 形参一致
         task_type: str,
         thread_id: UUID,
-        conversation_id: UUID | None,
+        conversation_id: str | None,  # DB 会话主键（int PK）序列化串，常空
         priority: str,
         payload: dict[str, Any],
         retry_count: int = 0,
         enqueued_at: str | None = None,
         message_id: str | None = None,  # Redis Stream 消息 ID，消费时填充
         stream: str | None = None,     # 所属 Stream，消费时填充
-    ):
+    ) -> None:
         self.task_id = task_id
         self.task_type = task_type
         self.thread_id = thread_id
@@ -77,10 +81,10 @@ class QueueMessage:
     def to_dict(self) -> dict[str, Any]:
         """序列化为 Redis Stream 字段字典。"""
         return {
-            "task_id": str(self.task_id),
+            "task_id": self.task_id,
             "task_type": self.task_type,
             "thread_id": str(self.thread_id),
-            "conversation_id": str(self.conversation_id) if self.conversation_id else "",
+            "conversation_id": self.conversation_id or "",
             "priority": self.priority,
             "payload": json.dumps(self.payload, ensure_ascii=False),
             "retry_count": str(self.retry_count),
@@ -91,10 +95,10 @@ class QueueMessage:
     def from_stream_entry(cls, stream: str, message_id: str, fields: dict[str, str]) -> QueueMessage:
         """从 Redis Stream 条目反序列化。"""
         return cls(
-            task_id=UUID(fields["task_id"]),
+            task_id=fields["task_id"],
             task_type=fields["task_type"],
             thread_id=UUID(fields["thread_id"]),
-            conversation_id=UUID(fields["conversation_id"]) if fields.get("conversation_id") else None,
+            conversation_id=fields.get("conversation_id") or None,
             priority=fields["priority"],
             payload=json.loads(fields["payload"]),
             retry_count=int(fields.get("retry_count", "0")),
@@ -123,28 +127,17 @@ class QueueClient:
             await queue.requeue_or_deadletter(message)
     """
 
-    def __init__(self, redis: Redis | None = None):
+    def __init__(
+        self,
+        redis: Redis | None = None,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
+    ) -> None:
         self._redis = redis or get_redis_client()
+        # 对齐 WorkflowEngine 的注入模式：短会话 + 显式提交，测试可注入假工厂；
+        # 修复旧实现在函数体内用「坏导入 + 同步迭代取异步 session」的错误用法
+        # （app.core.db.get_db_session 不存在，且 next() 迭代 async session 在 async 世界必死）
+        self._session_factory = session_factory or get_session_factory()
         self._consumer_name: str | None = None
-        self._task_service: TaskService | None = None
-
-    @property
-    def task_service(self) -> TaskService:
-        """懒加载 TaskService，避免循环 import。
-
-        QueueClient 需要检查任务是否已终态，需访问 DB，
-        但 TaskService -> QueueClient -> TaskService 会形成循环依赖，
-        因此采用首次访问时才实例化。
-        """
-        if self._task_service is None:
-            from app.core.db import get_db_session
-            from app.repository.task import TaskRepository
-            from app.service.task import TaskService
-
-            # 临时 session 每次创建新 session 实例（非单例）
-            session = next(get_db_session())
-            self._task_service = TaskService(task_repo=TaskRepository(session=session))
-        return self._task_service
 
     async def ensure_consumer_groups(self) -> None:
         """确保所有 Stream 的消费组已创建。
@@ -411,7 +404,7 @@ class QueueClient:
             logger.info("Recovered %d stalled messages total", recovered)
         return recovered
 
-    async def _is_task_terminal(self, task_id: UUID) -> bool:
+    async def _is_task_terminal(self, task_id: str) -> bool:
         """检查任务是否已终态。
 
         幂等性保障：消息可能因重试重复投递，
@@ -420,26 +413,16 @@ class QueueClient:
         终态：succeeded / failed / canceled
         """
         try:
-            # 注意：这里调用的是 TaskService.get_by_id，
-            # 但 QueueClient 没有 user_id，使用 system 上下文？
-            # 方案：Repository 层增加 get_status 方法，不校验 user_id
-            # 临时方案：直接调用 Repository 层，跳过权限校验
-            from app.core.db import get_db_session
-            from app.repository.task import TaskRepository
-
-            session = next(get_db_session())
-            repo = TaskRepository(session=session)
-            task = await repo.get(task_id=task_id)
-            if not task:
-                return True  # 任务不存在，视为终态（避免死循环）
-            return task.status in {
-                TaskStatus.SUCCEEDED,
-                TaskStatus.FAILED,
-                TaskStatus.CANCELED,
-            }
+            async with self._session_factory() as session:
+                # get(id: int) 接收 DB 主键：task_id 是消息里的 int PK 序列化串
+                task = await TaskRepository(session).get(int(task_id))
         except Exception:
-            logger.exception("Failed to check task terminal status", extra={"task_id": str(task_id)})
+            logger.exception("Failed to check task terminal status", extra={"task_id": task_id})
             return False  # 检查失败，保守假设非终态，继续执行
+        if task is None:
+            # 任务不存在，视为终态（避免死循环）
+            return True
+        return task.status in _TERMINAL_STATUSES
 
 
 @lru_cache(maxsize=1)

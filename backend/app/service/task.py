@@ -160,10 +160,12 @@ class TaskService(BaseService):
         QueueClient, QueueMessage = _get_queue_classes()
         queue = QueueClient()
         message = QueueMessage(
-            task_id=task.id,
+            task_id=str(task.id),
             task_type=data.type.value,
             thread_id=thread_id,
-            conversation_id=data.conversation_id,
+            # 队列消息的 task_id/conversation_id 统一为「DB int 主键序列化串」，
+            # 避免消费端 UUID() 解析 int PK（"123"）时 ValueError。
+            conversation_id=str(data.conversation_id) if data.conversation_id else None,
             priority=priority.value,
             payload=data.params or {},
         )
