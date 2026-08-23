@@ -1,11 +1,11 @@
-# boss-extract-jobs — Boss 直聘岗位提取垂直工具
+# boss_extract_jobs — Boss 直聘岗位提取垂直工具
 
 把「提取 Boss 岗位 → 按岗位适配度筛选 → 幂等落库」封装为未来 agent（doc 06）可直接编排的垂直领域工具。**先落契约与实现，agent 运行时实现后接线**（见 SKILL.md「接线说明」）。
 
 ## 目录结构
 
 ```
-backend/app/agent/skills/boss-extract-jobs/
+backend/app/agent/skills/boss_extract_jobs/
 ├── __init__.py        # 包导出（BossExtractService / SkillResult / JobRules）
 ├── SKILL.md           # doc 08 Skill 契约（目标/输入/输出/Prompt/Tool 需求/Recovery/接线）
 ├── extract-jobs.js    # 浏览器提取脚本（MAIN world，注入用，<10000 字符）
@@ -36,10 +36,10 @@ backend/app/agent/skills/boss-extract-jobs/
 
 ```bash
 # 从仓库根（用 backend venv 跑，与 backend 测试同一解释器）
-backend/.venv/Scripts/python.exe -m pytest backend/app/agent/skills/boss-extract-jobs/tests -v
+backend/.venv/Scripts/python.exe -m pytest backend/app/agent/skills/boss_extract_jobs/tests -v
 
 # 或进目录独立跑（conftest 自动注入 sys.path）
-cd backend/app/agent/skills/boss-extract-jobs && python -m pytest tests -v
+cd backend/app/agent/skills/boss_extract_jobs && python -m pytest tests -v
 ```
 
 ## 快速试跑（不连浏览器）
@@ -53,7 +53,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path("backend/app/agent/skills/boss-extract-jobs").resolve()))
+sys.path.insert(0, str(Path("backend/app/agent/skills/boss_extract_jobs").resolve()))
 from job_fit import JobRules  # noqa: E402
 from service import BossExtractService  # noqa: E402
 

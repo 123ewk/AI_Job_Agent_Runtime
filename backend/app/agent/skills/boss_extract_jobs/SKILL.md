@@ -55,9 +55,9 @@
 | 内容读取（**兜底 1**） | `chrome_get_web_content` | `chrome_javascript` 不可用时解析 DOM（best-effort，薪资置空） |
 | 内容读取/交互（**兜底 3**，文档化） | `chrome_read_page` / `click_element` | 结构异常时 agent 读页定位、滚动分页后重试（接线后由 ReAct 决策，不在本工具内实现） |
 
-> ⚠️ **前置授权**：`chrome_javascript` 目前被 `BROWSER_MCP_RISK_TOOLS` 拦截（"高危工具需 Skill 级授权"）。
-> 接线本 Skill 前需将其从风险列表移除或改为 Skill 级授权放行（`backend/app/core/config.py` → `browser_mcp_risk_tools`），
-> 或确认后续 doc 14 Approval 流覆盖该调用。未授权时本 Skill 自动降级走 DOM 兜底并写 `warning`。
+> ✅ **授权状态（2026-08-23 已放行）**：`chrome_javascript` 已从 `BROWSER_MCP_RISK_TOOLS` 移除（净化，见 `backend/app/core/config.py` + `.env.example`），本 Skill 主路径可直接注入。
+> 仍保留高危待授权：`chrome_network_request`（非只读、可签发任意流量）。
+> 兜底语义保留：即使 `chrome_javascript` 被拒/报错，仍自动降级 `chrome_get_web_content` DOM 兜底（薪资置空 + warning）。
 
 ## 前置（DomainGuard 约束）
 
