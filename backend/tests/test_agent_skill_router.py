@@ -365,11 +365,12 @@ class TestMapGoalToSkillKeywords:
             call = executor.map_goal_to_skill(goal)
             assert call.skill == "boss.chat", goal
 
-    async def test_load_more_keywords_map_to_load_more(self) -> None:
+    async def test_load_more_keywords_fall_back_to_generic(self) -> None:
+        """加载更多/翻页/滚动：Boss 无限滚动无翻页按钮且滚动即新请求（非只读）→ 回退 generic。"""
         executor = make_executor(adapter=FakeAdapter())
         for goal in ("加载更多", "翻页", "下一页", "滚动"):
             call = executor.map_goal_to_skill(goal)
-            assert call.skill == "browser.load_more", goal
+            assert call.skill == "browser.generic", goal
 
     async def test_generic_goal_stays_generic(self) -> None:
         executor = make_executor(adapter=FakeAdapter())
@@ -463,29 +464,7 @@ class TestUnwiredVerticalServices:
 
 
 class TestBuiltinReadonlyRoutine:
-    LOAD_MORE_TREE = (
-        '"Page: BOSS\\nURL: https://www.zhipin.com/\\n\\n'
-        '  [ref_1 button \\"加载更多\\"]\\n'
-        '  [ref_2 button \\"下一页\\"]\\n"'
-    )
-
-    def test_default_registry_registers_load_more(self) -> None:
-        adapter = FakeAdapter()
-        executor = make_executor(adapter=adapter)  # 不注入 registry -> 默认注册内置例程
-        routine = executor._registry.get_by_skill("browser.load_more")
-        assert routine is not None
-        assert routine.id == "jobs.load_more"
-        assert routine.steps[0].tool == "chrome_click_element"
-        assert routine.steps[0].target.label_contains == "加载更多"
-
-    async def test_load_more_routine_clicks_feature_matched_button(self) -> None:
-        adapter = FakeAdapter()
-        adapter._tree = self.LOAD_MORE_TREE
-        executor = make_executor(adapter=adapter)
-
-        result = await executor.execute(SkillCall(skill="browser.load_more", args={}, goal="加载更多"))
-
-        assert result.ok is True
-        click_calls = [(name, a) for name, a in adapter.calls if name == "chrome_click_element"]
-        assert len(click_calls) == 1
-        assert click_calls[0][1]["ref"] == "ref_1"
+    def test_default_registry_has_no_routines(self) -> None:
+        """默认内置例程当前为空：Boss「加载更多」无安全只读实现，故不注册任何假例程。"""
+        executor = make_executor(adapter=FakeAdapter())  # 不注入 registry -> 默认注册内置例程
+        assert executor._registry.get_by_skill("browser.load_more") is None

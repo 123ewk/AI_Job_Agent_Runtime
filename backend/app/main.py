@@ -88,7 +88,7 @@ async def _assemble_agent_runtime(app: FastAPI) -> _AgentRuntime:
     与 SkillExecutor（浏览器锁，doc 04 §8.4）；浏览器桥启用时注入真实 adapter 及
     BossChatService/BossExtractService（垂直服务派发），未启用时注入 None
     （SkillExecutor 返回「未启用」错误，不崩）。默认 registry 由 SkillExecutor 自建并
-    注册内置只读例程（jobs.load_more）。
+    注册内置只读例程（当前无——Boss 加载更多无安全只读实现，见 builtin_routines）。
 
     失败兜底：仅 DB/Redis/持久化基建不可达会跳过 agent 执行能力（HTTP API 主体
     仍正常启动，不因编排层故障拖垮服务）；LLM 未配置属可处理场景，不再跳过。

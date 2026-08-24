@@ -4,7 +4,7 @@
 1. 垂直服务派发：skill=boss.chat/boss.extract_jobs -> 注入的垂直服务
    （chrome_javascript 注入；send 走 approved 红线，未接线报错而非退化）
 2. 查 RoutineRegistry：命中 -> RoutineRunner 逐步骤执行（确定性、无 LLM、省 token；
-   只读例程如 jobs.load_more 由默认 registry 内置注册）
+   只读例程由默认 registry 内置注册，当前无——Boss 加载更多无安全只读实现，见 builtin_routines）
 3. 例程失败 -> 整条例程重试 N 次（默认 2，页面变化 ref 失效 -> 重读树重新匹配）
 4. 重试耗尽 -> 双层兜底（可配置 browser_mcp_fallback_mode）：
    - 工具级自适应（无 LLM，宽松特征匹配）
@@ -43,7 +43,6 @@ _RULE_VIOLATION_MARKERS = ("高危工具", "未知工具", "不在白名单", "�
 # ---------------------------------------------------------------------------
 # goal 关键词 -> Skill id 映射（预写业务例程内容，第 4 项）
 # ---------------------------------------------------------------------------
-_LOAD_MORE_KEYWORDS = ("加载更多", "翻页", "下一页", "滚动")
 _EXTRACT_KEYWORDS = ("提取岗位", "搜索职位", "抓取岗位", "拉取职位", "解析岗位", "更新岗位")
 _CHAT_KEYWORDS = ("发送消息", "发消息", "发送", "回复", "拉取消息", "读取聊天", "同步会话", "查看会话")
 
@@ -51,13 +50,12 @@ _CHAT_KEYWORDS = ("发送消息", "发消息", "发送", "回复", "拉取消息
 def _map_goal_to_skill_id(goal: str) -> str:
     """goal 关键词 -> Skill id。
 
-    命中关键词则派发到垂直服务（boss.extract_jobs / boss.chat）或只读例程
-    （browser.load_more）；否则回退 browser.generic（例程 → 双层兜底）。
-    兜底只读，不自动写操作（红线见 _dispatch_chat 的 approved 门控）。
+    命中关键词则派发到垂直服务（boss.extract_jobs / boss.chat）；否则回退
+    browser.generic（例程 → 双层兜底，均只读、不自动写操作，见 _dispatch_chat 的
+    approved 门控）。「加载更多/翻页/滚动」刻意不映射：Boss 岗位列表为无限滚动无翻页
+    按钮（逆向文档），且滚动加载=新请求=违反只读红线，无安全自动只读实现，故回退 generic。
     """
     g = goal.lower()
-    if any(k in g for k in _LOAD_MORE_KEYWORDS):
-        return "browser.load_more"
     if any(k in g for k in _EXTRACT_KEYWORDS):
         return "boss.extract_jobs"
     if any(k in g for k in _CHAT_KEYWORDS):
@@ -99,7 +97,7 @@ class SkillExecutor:
     ) -> None:
         self._adapter = adapter
         if registry is None:
-            # 自建 registry：自动注册内置只读例程（如 jobs.load_more）；注入的 registry 由调用方决定注册
+            # 自建 registry：自动注册内置只读例程；注入的 registry 由调用方决定注册
             registry = RoutineRegistry()
             for routine in builtin_readonly_routines():
                 registry.register(routine)
