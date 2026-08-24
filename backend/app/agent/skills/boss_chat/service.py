@@ -291,6 +291,20 @@ class BossChatService:
         if self.adapter is None:
             return SkillResult(ok=False, error="浏览器适配器未接线（注入 adapter，或设置 BROWSER_MCP_ENABLED）")
 
+        # 会话校验：期望 external_id 与当前选中会话须一致，避免「发给谁」错位（对齐 _op_messages §1.4）。
+        # 复用只读 messages 的 conv_meta 取当前会话 id，零浏览器写副作用。
+        if external_id:
+            _, conv_meta, _ = await self._read_messages([])
+            current = (conv_meta or {}).get("external_id")
+            if current is not None and current != external_id:
+                return SkillResult(
+                    ok=False,
+                    error=(
+                        f"当前选中会话 ({current}) 与期望会话 ({external_id}) 不一致；"
+                        "本 Skill 不自动切换（切换会话=触发新 historyMsg 请求），请真人/agent 先切换"
+                    ),
+                )
+
         result = await self.adapter.call_tool(
             "chrome_javascript", {"code": await self._build_script("send", {"text": text})}
         )

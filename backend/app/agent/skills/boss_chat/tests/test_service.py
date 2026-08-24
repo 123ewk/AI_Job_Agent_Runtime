@@ -272,3 +272,32 @@ async def test_send_empty_text_rejected() -> None:
     svc = BossChatService(adapter=_FakeAdapter())
     res: SkillResult = await svc.run(1, operation="send", approved=True, text="   ")
     assert not res.ok
+
+
+async def test_send_conversation_mismatch_refused() -> None:
+    """send：期望 external_id 与当前选中会话不一致 → 拒绝，不真正发送。"""
+    adapter = _FakeAdapter(
+        {"ok": True, "conversation": {"external_id": "CURRENT"}, "messages": [], "warnings": []}
+    )
+    svc = BossChatService(adapter=adapter)
+    res: SkillResult = await svc.run(
+        1, operation="send", approved=True, text="你好", external_id="EXPECTED"
+    )
+
+    assert not res.ok
+    assert "不一致" in (res.error or "")
+    assert len(adapter.calls) == 1  # 只做了一次会话读取，未触发 send 脚本
+
+
+async def test_send_conversation_match_dispatches() -> None:
+    """send：期望 external_id 与当前会话一致 → 正常发送（前多一次只读会话读取）。"""
+    adapter = _FakeAdapter(
+        {"ok": True, "conversation": {"external_id": "EXPECTED"}, "messages": [], "warnings": []}
+    )
+    svc = BossChatService(adapter=adapter)
+    res: SkillResult = await svc.run(
+        1, operation="send", approved=True, text="你好", external_id="EXPECTED"
+    )
+
+    assert res.ok
+    assert len(adapter.calls) == 2  # 1 次会话读取 + 1 次 send
