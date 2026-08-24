@@ -13,7 +13,7 @@ State 是 LangGraph 图中各节点共享的唯一数据载体；reducer 决定"
 """
 
 from collections.abc import Callable
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, NotRequired, TypedDict
 
 Reducer = Callable[[list[Any]], list[Any]]
 
@@ -67,6 +67,7 @@ class AgentState(TypedDict):
     task_type: str  # proactive_job|proactive_chat|hr_reply|approval_resume|sync|recovery
     thread_id: str  # Checkpoint 线（configurable.thread_id 与此一致）
     conversation_id: str | None
+    user_id: NotRequired[int]  # receive_task 装载（单用户 V1；供 task.step 广播定位用户）
     messages: Annotated[list[dict[str, Any]], append_dedup]  # 会话历史（来自 DB）
     plan: Annotated[list[dict[str, Any]], plan_reducer]
     current_step: int

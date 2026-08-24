@@ -48,6 +48,7 @@ def make_receive_task(runtime: GraphRuntime) -> NodeFunc:
             "task_type": task.task_type,
             "thread_id": task.thread_id,
             "conversation_id": task.conversation_id,
+            "user_id": task.user_id,
             "messages": msgs,
         }
 

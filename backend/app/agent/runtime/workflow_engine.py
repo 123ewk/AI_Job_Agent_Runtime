@@ -30,6 +30,7 @@ from app.agent.graph.deps import PlannerLike, SkillExecutorLike, TaskInfo
 from app.agent.graph.state import AgentState
 from app.agent.prompts.planner import LangchainPlanner, PlannerLLMConfig
 from app.agent.runtime.lock_manager import LockManager
+from app.agent.runtime.ws_hub import emit_approval_required, emit_notification, emit_task_updated
 from app.core.exceptions import NotFoundError
 from app.db.base import get_session_factory
 from app.models.message import Message
@@ -37,6 +38,7 @@ from app.models.task import Task
 from app.repository.message import MessageRepository
 from app.repository.task import TaskRepository
 from app.schema.enums import ApprovalType, TaskStatus
+from app.schema.task import ApprovalResponse
 from app.service.approval import ApprovalService
 from app.service.task import TaskService
 
@@ -46,8 +48,13 @@ logger = logging.getLogger(__name__)
 # 避免长会话全量加载占 token 预算（doc 06 §17）
 MESSAGE_WINDOW = 50
 
+# emit 时 current_task 缺失的兜底 user_id（正常不应触发；与 api/deps 单用户口径一致）
+_FALLBACK_USER_ID = 1
+
 PersistFn = Callable[[AgentState], Awaitable[None]]
 RecoverFn = Callable[[dict[str, Any]], Awaitable[bool]]
+# llm 延迟解析工厂：run() 首次执行前调用拿 planner（需求②：LLM 校验挪到调用期）
+PlannerFactory = Callable[[], Awaitable[PlannerLike]]
 
 
 class EngineStateError(RuntimeError):
@@ -82,8 +89,9 @@ class WorkflowEngine:
 
     def __init__(
         self,
-        llm: PlannerLike,
+        llm: PlannerLike | None = None,
         *,
+        planner_factory: PlannerFactory | None = None,
         skills: SkillExecutorLike | None = None,
         checkpointer: BaseCheckpointSaver[Any] | None = None,
         locks: LockManager | None = None,
@@ -91,7 +99,15 @@ class WorkflowEngine:
         persist_fn: PersistFn | None = None,
         recover_fn: RecoverFn | None = None,
     ) -> None:
+        """构造引擎。
+
+        ``llm`` 与 ``planner_factory`` 二选一：
+        - 测试/已就绪时直接传 ``llm``（eager）。
+        - 生产经 ``planner_factory`` 惰性解析（需求②），启动不校验 LLM，首个任务
+          真正执行前才读配置——配好正常跑，未配弹窗提醒且不执行该任务流程。
+        """
         self._llm = llm
+        self._planner_factory = planner_factory
         self._skills = skills
         self._persist_fn = persist_fn
         self._recover_fn = recover_fn
@@ -131,6 +147,7 @@ class WorkflowEngine:
             task_type=task.type,
             thread_id=thread,
             conversation_id=str(task.conversation_id) if task.conversation_id else None,
+            user_id=task.user_id,
         )
 
     async def list_messages(self, conversation_id: str) -> list[dict[str, Any]]:
@@ -155,13 +172,22 @@ class WorkflowEngine:
         except ValueError as exc:
             msg = f"非法审批类型 '{raw_type}'：须为 doc 14 七类敏感信息之一"
             raise ValueError(msg) from exc
-        approval_id = await self._create_approval_record(
+        approval = await self._create_approval_record(
             task_id=current.db_id,
             user_id=current.user_id,
             approval_type=approval_type,
             payload=context.get("context") or {},
         )
-        return approval_id  # noqa: RET504 — 显式命名返回值便于断点/日志定位
+        # 写审批记录后推 approval.required：前端弹审批框（expires_at 供倒计时）。
+        # 在引擎内发而不依赖 ApprovalService 的原因：审批事务在运行时独立推进，
+        # 事件由动作源（引擎）在落库点就近广播，语义与 create_approval 的节点回调绑定。
+        await emit_approval_required(
+            approval.id,
+            current.db_id,
+            current.user_id,
+            approval.expires_at or "",
+        )
+        return approval.id
 
     async def persist(self, state: AgentState) -> None:
         """sync 节点回调：SyncService 落库（doc 13，接线前 fail-fast）。"""
@@ -201,10 +227,22 @@ class WorkflowEngine:
         task = await self._fetch_task(task_id)
         thread_id = str(task.thread_id) if task.thread_id else f"task-{task.id}"
 
+        # 需求②：LLM 延迟校验——任务真正执行前才解析配置（启动期不因未配降级）。
+        # 未配置：弹窗提醒 + 标任务 failed，且不执行该任务的图流程（不占执行锁）。
+        if not await self._resolve_llm():
+            await self._reject_missing_llm(task.id, task.user_id)
+            return {
+                "terminal": "failed",
+                "error_state": {"node": "planner", "error": "LLM 未配置", "kind": "config"},
+            }
+
         await self._locks.acquire_execution()
         self._current_task = _TaskContext(db_id=task.id, user_id=task.user_id, thread_id=thread_id, task_type=task.type)
         try:
             await self._set_task_status(task.id, TaskStatus.RUNNING)
+            await emit_task_updated(
+                task.id, task.user_id, {"status": TaskStatus.RUNNING.value, "message": "开始执行"}
+            )
             result = await self._graph.ainvoke(
                 {"task_id": str(task.id)},
                 config={"configurable": {"thread_id": thread_id}},
@@ -226,6 +264,9 @@ class WorkflowEngine:
             raise EngineStateError(msg)
         try:
             await self._set_task_status(current.db_id, TaskStatus.RUNNING)
+            await emit_task_updated(
+                current.db_id, current.user_id, {"status": TaskStatus.RUNNING.value, "message": "审批续跑"}
+            )
             result = await self._graph.ainvoke(
                 Command(resume=decision),
                 config={"configurable": {"thread_id": thread_id}},
@@ -250,21 +291,31 @@ class WorkflowEngine:
 
     async def _finish_or_suspend(self, task_db_id: int, result: dict[str, Any]) -> dict[str, Any]:
         """收尾分流：挂起（保锁）或终态（写状态 + 释放锁）。"""
+        user_id = self._current_task.user_id if self._current_task is not None else _FALLBACK_USER_ID
         if "__interrupt__" in result:
             await self._set_task_status(task_db_id, TaskStatus.WAITING_APPROVAL)
+            await emit_task_updated(
+                task_db_id, user_id, {"status": TaskStatus.WAITING_APPROVAL.value, "message": "等待审批"}
+            )
             return result
 
         terminal = result.get("terminal")
         final = TaskStatus.SUCCEEDED if terminal == "succeeded" else TaskStatus.FAILED
         error_state = result.get("error_state") or {}
-        await self._set_task_status(task_db_id, final, error_message=str(error_state.get("error") or "") or None)
+        error_msg = str(error_state.get("error") or "") or None
+        await self._set_task_status(task_db_id, final, error_message=error_msg)
+        await emit_task_updated(task_db_id, user_id, {"status": final.value, "message": error_msg or final.value})
         self._teardown()
         return result
 
     async def _abort(self, task_db_id: int) -> None:
         """图执行异常收尾：尽力标 failed + 释放锁，不掩盖原始异常。"""
+        user_id = self._current_task.user_id if self._current_task is not None else _FALLBACK_USER_ID
         try:
             await self._set_task_status(task_db_id, TaskStatus.FAILED, error_message="graph execution aborted")
+            await emit_task_updated(
+                task_db_id, user_id, {"status": TaskStatus.FAILED.value, "message": "graph execution aborted"}
+            )
         except Exception:
             # 状态流转非法（如从未进 running）也必须释放锁，吞掉次级异常
             logger.exception("Failed to mark task failed during abort", extra={"task_id": task_db_id})
@@ -275,6 +326,41 @@ class WorkflowEngine:
         """清执行上下文并释放执行锁（幂等）。"""
         self._current_task = None
         self._locks.release_execution()
+
+    # ------------------------------------------------------------------
+    # LLM 延迟解析（需求②：启动不校验，调用期才检查配置）
+    # ------------------------------------------------------------------
+    async def _resolve_llm(self) -> bool:
+        """确保 planner 就绪（惰性解析）。
+
+        Returns:
+            True = LLM 可用（可直接跑图）；False = 未配置（调用方弹窗且不执行）。
+        """
+        if self._llm is not None:
+            return True
+        if self._planner_factory is None:
+            msg = "planner 既未注入也未提供工厂（装配缺陷）"
+            raise EngineStateError(msg)
+        try:
+            self._llm = await self._planner_factory()
+        except PlannerConfigError:
+            # 未配置：不缓存结果，下次 run 会重新检查——用户在设置页配好后，
+            # 后续任务无需重启即自动生效（不会带着旧的"缺失"僵住）。
+            logger.warning("LLM not configured, deferring task execution")
+            return False
+        return True
+
+    async def _reject_missing_llm(self, task_id: int, user_id: int) -> None:
+        """LLM 未配置：弹窗提醒 + 标任务 failed，且不跑该任务流程。
+
+        刻意不写"graph execution aborted"等误导文案——失败原因就是没配 LLM，
+        前端据此引导用户去设置页（notification 弹窗 + task.updated 同时推送）。
+        """
+        msg = "后端 LLM 未配置：请先在设置页配置 api_key 与 model 后再重试"
+        await self._set_task_status(task_id, TaskStatus.FAILED, error_message=msg)
+        await emit_notification(user_id, "error", "配置缺失", msg)
+        await emit_task_updated(task_id, user_id, {"status": TaskStatus.FAILED.value, "message": msg})
+        logger.warning("Task skipped: LLM not configured", extra={"task_id": task_id, "user_id": user_id})
 
     # ------------------------------------------------------------------
     # DB 边界（短 session；测试覆写点）
@@ -308,12 +394,11 @@ class WorkflowEngine:
         user_id: int,
         approval_type: ApprovalType,
         payload: dict[str, Any],
-    ) -> str:
+    ) -> ApprovalResponse:
         async with self._session_factory() as session:
-            resp = await ApprovalService(session).create(
+            return await ApprovalService(session).create(
                 task_id=task_id, user_id=user_id, approval_type=approval_type, context=payload
             )
-        return str(resp.id)
 
 
 # ----------------------------------------------------------------------

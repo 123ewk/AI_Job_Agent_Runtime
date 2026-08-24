@@ -32,12 +32,17 @@ class LLMPlanError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class TaskInfo:
-    """receive_task 从 DB 装载的任务元数据（doc 06 §5.1）。"""
+    """receive_task 从 DB 装载的任务元数据（doc 06 §5.1）。
+
+    user_id 供图节点/builder 广播 task.step 时定位用户通道（单用户 V1 固定 1，
+    默认值保证 FakeRuntime 等测试构造不受影响）。
+    """
 
     task_id: str
     task_type: str
     thread_id: str
     conversation_id: str | None = None
+    user_id: int = 1
 
 
 @dataclass(frozen=True, slots=True)

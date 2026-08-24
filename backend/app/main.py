@@ -1,15 +1,27 @@
 """FastAPI 应用入口。
 
-启动：uv run uvicorn app.main:app --reload --port 8000
+启动（Windows 关键）：uv run uvicorn app.main:app --loop app.loops:selector_factory --port 8000
+`--loop` 必须指定 Selector 工厂 —— 见 app/loops.py：psycopg async 连库依赖
+SelectorEventLoop，uvicorn 默认在 Windows 强给 ProactorEventLoop 会让 CheckpointStore
+装配直接崩（browser_mcp 已改线程 Popen，不再需要 Proactor）。
 """
 
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from typing import Any
+
+# Windows 上 psycopg3 的 async 模式走 selector 的 add_reader 收 IO 事件，
+# 而 Python 3.8+ 默认的 Windows 事件循环是 ProactorEventLoop（不支持 add_reader）
+# -> psycopg 直接抛 "cannot use ProactorEventLoop"。uvicorn 在 import 完应用后才建
+# 事件循环，故在此处把策略切成 SelectorEventLoop，可保证 uvicorn 拿到的就是它。
+# 若不切，async 连库（CheckpointStore / planner 读 settings 表）在 live 启动必崩。
+if sys.platform == "win32" and asyncio.get_event_loop_policy().__class__.__name__ == "WindowsProactorEventLoopPolicy":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,9 +35,10 @@ from app.agent.runtime.engine_registry import clear_runtime_engine, set_runtime_
 from app.agent.runtime.lock_manager import LockManager
 from app.agent.runtime.queue_consumer import QueueConsumer
 from app.agent.runtime.workflow_engine import WorkflowEngine, create_planner_from_settings
+from app.agent.skills.boss_chat.service import BossChatService
+from app.agent.skills.boss_extract_jobs.service import BossExtractService
 from app.agent.tools.fallback import create_fallback_llm_from_settings
 from app.agent.tools.router import SkillExecutor
-from app.agent.tools.routine import RoutineRegistry
 from app.api.v1.router import api_router
 from app.api.ws import ws_router
 from app.core.config import get_settings
@@ -61,23 +74,27 @@ class _AgentRuntime:
 async def _assemble_agent_runtime(app: FastAPI) -> _AgentRuntime:
     """装配 agent 引擎单例并启动后台消费循环（lifespan 启动期调用）。
 
-    依赖链：CheckpointStore（持 AsyncPostgresSaver + 业务索引）-> create_planner
-    （读用户 LLM 配置）-> WorkflowEngine（编译图，checkpointer=store.checkpointer）
-    -> QueueConsumer -> 后台 run_forever 任务。
+    依赖链：CheckpointStore（持 AsyncPostgresSaver + 业务索引）-> WorkflowEngine
+    （planner 经惰性工厂延迟解析，LLM 未配置不再导致启动跳过）-> QueueConsumer
+    -> 后台 run_forever 任务。
+
+    需求②（2026-08-24 用户拍板）：LLM 校验从启动期挪到调用期。启动时**不**读
+    settings 的 LLM 配置、不因未配置而降级——引擎装配后整块 agent 能力始终在线。
+    首个任务真正执行前（WorkflowEngine.run 内）才经 planner_factory 解析 LLM：
+    配好了正常跑；未配则弹 notification（前端弹窗）+ 任务标 failed 且不执行流程。
 
     SkillExecutor 接线（doc 17 例程 + 兜底）：共享 LockManager 给引擎（执行锁）
-    与 SkillExecutor（浏览器锁，doc 04 §8.4）；浏览器桥启用时注入真实 adapter，
-    未启用时注入 None（SkillExecutor 返回「未启用」错误，不崩）。
+    与 SkillExecutor（浏览器锁，doc 04 §8.4）；浏览器桥启用时注入真实 adapter 及
+    BossChatService/BossExtractService（垂直服务派发），未启用时注入 None
+    （SkillExecutor 返回「未启用」错误，不崩）。默认 registry 由 SkillExecutor 自建并
+    注册内置只读例程（jobs.load_more）。
 
-    失败兜底：任一步失败（LLM 未配置 / DB/Redis 暂不可达）直接上抛，由 lifespan
-    捕获并跳过 agent 执行能力——HTTP API 主体仍正常启动，不因编排层故障拖垮服务。
+    失败兜底：仅 DB/Redis/持久化基建不可达会跳过 agent 执行能力（HTTP API 主体
+    仍正常启动，不因编排层故障拖垮服务）；LLM 未配置属可处理场景，不再跳过。
     """
     store = CheckpointStore()
     await store.setup()  # 建 checkpoint 表（幂等）；DB 不可达在此抛
     locks = LockManager()
-    planner = await create_planner_from_settings(
-        get_session_factory(), user_id=_DEFAULT_USER_ID
-    )
     if settings.browser_mcp_enabled:
         browser_mcp = await get_browser_mcp(settings)
         adapter = BrowserToolAdapter(client=browser_mcp, settings=settings)
@@ -85,16 +102,30 @@ async def _assemble_agent_runtime(app: FastAPI) -> _AgentRuntime:
         fallback_llm = await create_fallback_llm_from_settings(
             get_session_factory(), user_id=_DEFAULT_USER_ID
         )
+        # 垂直服务接线：注入共享 adapter（chrome_javascript 已授权），复用同一把浏览器锁
+        chat_service = BossChatService(adapter=adapter)
+        extract_service = BossExtractService(adapter=adapter)
         skills = SkillExecutor(
             adapter=adapter,
-            registry=RoutineRegistry(),
             locks=locks,
             fallback_llm=fallback_llm,
             settings=settings,
+            chat_service=chat_service,
+            extract_service=extract_service,
         )
     else:
         skills = SkillExecutor(adapter=None, locks=locks, settings=settings)
-    engine = WorkflowEngine(planner, skills=skills, checkpointer=store.checkpointer, locks=locks)
+    # planner 惰性工厂：首个任务 run() 才读用户 LLM 配置（需求②，启动不降级）。
+    # factory 每次成功解析后由引擎缓存；未配置则下次任务重新检查（配好即生效）。
+    engine = WorkflowEngine(
+        None,
+        skills=skills,
+        checkpointer=store.checkpointer,
+        locks=locks,
+        planner_factory=lambda: create_planner_from_settings(
+            get_session_factory(), _DEFAULT_USER_ID
+        ),
+    )
     app.state.agent_engine = engine  # 供 WS 等触达同一引擎实例
     set_runtime_engine(engine)  # ApprovalService 经 service-locator 触达同引擎续跑
     queue = get_queue_client()
@@ -131,8 +162,13 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
 
     browser_mcp = await get_browser_mcp(settings)
     if settings.browser_mcp_enabled:
-        # 探测-复用-托管：端口已有健康 server 则复用，否则自己拉起并接管
-        await browser_mcp.start()
+        # 探测-复用-托管：端口已有健康 server 则复用，否则自己拉起并接管。
+        # 非 fatal：桥暂不可用（扩展未连 / Node 未就绪 / 端口被占）只降级浏览器能力，
+        # 由健康检查循环后续补偿；不让可恢复因素把整个应用拖死。
+        try:
+            await browser_mcp.start()
+        except Exception:
+            logger.exception("浏览器桥启动失败，稍后由健康检查重试（应用照常启动）")
     else:
         logger.info("浏览器桥未启用（BROWSER_MCP_ENABLED=false），跳过启动")
 

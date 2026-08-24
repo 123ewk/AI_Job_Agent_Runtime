@@ -22,10 +22,12 @@ from app.agent.graph.deps import (
     ToolResult,
 )
 from app.agent.graph.state import AgentState
+from app.agent.runtime import workflow_engine as wf_mod
 from app.agent.runtime.lock_manager import LockManager
 from app.agent.runtime.workflow_engine import (
     EngineStateError,
     PersistFn,
+    PlannerConfigError,
     RecoverFn,
     WorkflowEngine,
 )
@@ -90,12 +92,17 @@ def _task_row(task_id: int = 7, *, thread_id: object = _UNSET, conversation_id: 
 
 
 class FakeEngine(WorkflowEngine):
-    """覆写 DB 边界的引擎（内存版任务行/消息/状态/审批记录）。"""
+    """覆写 DB 边界的引擎（内存版任务行/消息/状态/审批记录）。
+
+    ``llm`` 与 ``planner_factory`` 二选一：前者 eager（多数既有用例），后者传
+    惰性工厂覆盖「LLM 延迟解析」路径（需求②）——此时 ``llm`` 传 None。
+    """
 
     def __init__(
         self,
-        llm: PlannerLike,
+        llm: PlannerLike | None = None,
         *,
+        planner_factory: wf_mod.PlannerFactory | None = None,
         skills: SkillExecutorLike | None = None,
         task_row: Any = None,  # noqa: ANN401 - SimpleNamespace 伪 Task 行
         messages: list[Any] | None = None,
@@ -109,6 +116,7 @@ class FakeEngine(WorkflowEngine):
         self.approvals: list[tuple[int, int, str]] = []
         super().__init__(
             llm,
+            planner_factory=planner_factory,
             skills=skills,
             checkpointer=InMemorySaver(),
             locks=self.locks,
@@ -134,9 +142,10 @@ class FakeEngine(WorkflowEngine):
         user_id: int,
         approval_type: ApprovalType,
         payload: dict[str, Any],  # noqa: ARG002 - 覆写签名对齐，值由断言另行覆盖
-    ) -> str:
+    ) -> SimpleNamespace:
+        # duck ApprovalResponse：id 供 create_approval 返回，expires_at 供 WS 审批广播
         self.approvals.append((task_id, user_id, approval_type.value))
-        return "101"
+        return SimpleNamespace(id=101, expires_at="2026-01-01T00:00:00Z")
 
 
 async def test_run_happy_path_marks_succeeded_and_releases_lock() -> None:
@@ -304,3 +313,136 @@ async def test_load_task_and_list_messages_conversion() -> None:
 
     msgs = await engine.list_messages("5")
     assert msgs == [{"message_id": "1", "sender": "hr", "text": "你好"}]
+
+
+async def test_engine_emits_task_updated_through_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """生命周期事件：run 开始 running、挂起 waiting_approval、resume running、终态。"""
+    task_events: list[tuple[int, int, dict[str, Any]]] = []
+
+    async def _record_task(tid: int, uid: int, data: dict[str, Any]) -> None:
+        task_events.append((tid, uid, data))
+
+    monkeypatch.setattr(wf_mod, "emit_task_updated", _record_task)
+
+    llm = FakeLLM(
+        [
+            PlannerDecision(action="skill_call", goal="回复期望薪资", needs_approval=True, approval_type="salary"),
+            PlannerDecision(action="end"),
+        ]
+    )
+    engine = FakeEngine(llm)
+
+    result = await engine.run("7")
+    assert "__interrupt__" in result
+
+    statuses = [e[2]["status"] for e in task_events]
+    assert statuses == ["running", "waiting_approval"]
+
+    result2 = await engine.resume_by_task(7, "approve")
+    assert result2["terminal"] == "succeeded"
+
+    statuses = [e[2]["status"] for e in task_events]
+    assert statuses == ["running", "waiting_approval", "running", "succeeded"]
+    assert all(tid == 7 and uid == 1 for tid, uid, _ in task_events)
+
+
+async def test_engine_emits_approval_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    """写入审批记录后推 approval.required（含 approval_id/expires_at）。"""
+    approval_events: list[tuple[int, int, int, str]] = []
+
+    async def _record_approval(aid: int, tid: int, uid: int, exp: str) -> None:
+        approval_events.append((aid, tid, uid, exp))
+
+    monkeypatch.setattr(wf_mod, "emit_approval_required", _record_approval)
+
+    llm = FakeLLM(
+        [PlannerDecision(action="skill_call", goal="回复期望薪资", needs_approval=True, approval_type="salary")]
+    )
+    engine = FakeEngine(llm)
+    await engine.run("7")
+
+    assert approval_events == [(101, 7, 1, "2026-01-01T00:00:00Z")]
+
+
+# ---------------------------------------------------------------------------
+# 需求②：LLM 延迟解析（启动不校验，调用期才检查；未配置弹窗且不执行流程）
+# ---------------------------------------------------------------------------
+async def _factory_returning(llm: PlannerLike) -> PlannerLike:
+    """惰性工厂辅助：返回一个已就绪的 planner（用于已验证配置路径）。"""
+    return llm
+
+
+async def _noop_notify(_uid: int, _level: str, _title: str, _msg: str) -> None:
+    """notification 记录 no-op：missing-llm 探索用例无需关心弹窗细节。"""
+
+
+async def _noop_task(_tid: int, _uid: int, _data: dict[str, Any]) -> None:
+    """task.updated 记录 no-op：missing-llm 探索用例无需关心广播细节。"""
+
+
+async def test_run_resolves_llm_lazily_when_configured() -> None:
+    """planner_factory 提供且配置齐全：首次 run 自动解析，正常跑到终态。"""
+    llm = FakeLLM([PlannerDecision(action="end")])
+    engine = FakeEngine(None, planner_factory=lambda: _factory_returning(llm))
+
+    result = await engine.run("7")
+
+    assert result["terminal"] == "succeeded"
+    assert [s[1] for s in engine.status_calls] == ["running", "succeeded"]
+    assert not engine.locks.execution_locked
+
+
+async def test_run_missing_llm_skips_flow_and_notifies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LLM 未配置：不进图、不占执行锁、标 failed、弹窗提醒 + task.updated。"""
+    notifications: list[tuple[int, str, str, str]] = []
+    task_events: list[tuple[int, int, dict[str, Any]]] = []
+
+    async def _record_notif(uid: int, level: str, title: str, msg: str) -> None:
+        notifications.append((uid, level, title, msg))
+
+    async def _record_task(tid: int, uid: int, data: dict[str, Any]) -> None:
+        task_events.append((tid, uid, data))
+
+    monkeypatch.setattr(wf_mod, "emit_notification", _record_notif)
+    monkeypatch.setattr(wf_mod, "emit_task_updated", _record_task)
+
+    async def _no_llm() -> PlannerLike:
+        msg = "LLM 未配置"
+        raise PlannerConfigError(msg)
+
+    engine = FakeEngine(None, planner_factory=_no_llm)
+    result = await engine.run("7")
+
+    # 返回终态 failed（consumer 据此 ACK），且不触碰执行锁
+    assert result["terminal"] == "failed"
+    assert not engine.locks.execution_locked
+    assert [s[1] for s in engine.status_calls] == ["failed"]
+    assert engine.status_calls[0][2] and "LLM 未配置" in engine.status_calls[0][2]
+    # 弹窗提醒 + task.updated 双通道
+    assert notifications == [(1, "error", "配置缺失", "后端 LLM 未配置：请先在设置页配置 api_key 与 model 后再重试")]
+    statuses = [e[2]["status"] for e in task_events]
+    assert statuses == ["failed"]
+
+
+async def test_missing_llm_reevaluates_on_next_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """未配置不缓存：下次 run 重新检查——用户在设置页配好后无需重启即生效。"""
+    monkeypatch.setattr(wf_mod, "emit_notification", _noop_notify)
+    monkeypatch.setattr(wf_mod, "emit_task_updated", _noop_task)
+    healthy = FakeLLM([PlannerDecision(action="end")])
+    state = {"configured": False}
+
+    async def _flaky_factory() -> PlannerLike:
+        if not state["configured"]:
+            msg = "LLM 未配置"
+            raise PlannerConfigError(msg)
+        return healthy
+
+    engine = FakeEngine(None, planner_factory=_flaky_factory)
+
+    first = await engine.run("7")
+    assert first["terminal"] == "failed"
+
+    state["configured"] = True  # 用户在设置页补配后
+    second = await engine.run("7")
+    assert second["terminal"] == "succeeded"
+    assert not engine.locks.execution_locked
