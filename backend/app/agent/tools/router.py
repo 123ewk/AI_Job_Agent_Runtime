@@ -1,9 +1,12 @@
 """SkillExecutor（doc 06 §5.4-5.5 / doc 07 §2）——tools/router.py 的实现。
 
-执行顺序（用户确认的「预写 + 兜底」链路）：
-1. 查 RoutineRegistry：命中 -> RoutineRunner 逐步骤执行（确定性、无 LLM、省 token）
-2. 例程失败 -> 整条例程重试 N 次（默认 2，页面变化 ref 失效 -> 重读树重新匹配）
-3. 重试耗尽 -> 双层兜底（可配置 browser_mcp_fallback_mode）：
+执行顺序（用户确认的「派发 + 预写 + 兜底」链路）：
+1. 垂直服务派发：skill=boss.chat/boss.extract_jobs -> 注入的垂直服务
+   （chrome_javascript 注入；send 走 approved 红线，未接线报错而非退化）
+2. 查 RoutineRegistry：命中 -> RoutineRunner 逐步骤执行（确定性、无 LLM、省 token；
+   只读例程如 jobs.load_more 由默认 registry 内置注册）
+3. 例程失败 -> 整条例程重试 N 次（默认 2，页面变化 ref 失效 -> 重读树重新匹配）
+4. 重试耗尽 -> 双层兜底（可配置 browser_mcp_fallback_mode）：
    - 工具级自适应（无 LLM，宽松特征匹配）
    - LLM 动态操作（ReAct ≤ max_steps 步，复用 planner 同款结构化输出）
 
@@ -24,6 +27,7 @@ from app.agent.graph.deps import (
     ToolResult,
 )
 from app.agent.runtime.lock_manager import LockManager, LockTimeoutError
+from app.agent.tools.builtin_routines import builtin_readonly_routines
 from app.agent.tools.fallback import AdaptiveFallback, FallbackLLM, LLMFallback
 from app.agent.tools.routine import Routine, RoutineRegistry
 from app.agent.tools.runner import AdapterToolResult, RoutineError, RoutineRunner, ToolCaller
@@ -36,15 +40,47 @@ _FALLBACK_MODES = frozenset({"adaptive", "llm", "both", "off"})
 # adapter 返回的错误文本中命中即不可重试（白名单/授权类）
 _RULE_VIOLATION_MARKERS = ("高危工具", "未知工具", "不在白名单", "白名单", "未授权")
 
+# ---------------------------------------------------------------------------
+# goal 关键词 -> Skill id 映射（预写业务例程内容，第 4 项）
+# ---------------------------------------------------------------------------
+_LOAD_MORE_KEYWORDS = ("加载更多", "翻页", "下一页", "滚动")
+_EXTRACT_KEYWORDS = ("提取岗位", "搜索职位", "抓取岗位", "拉取职位", "解析岗位", "更新岗位")
+_CHAT_KEYWORDS = ("发送消息", "发消息", "发送", "回复", "拉取消息", "读取聊天", "同步会话", "查看会话")
 
-def _map_goal_to_skill_id(_goal: str) -> str:
-    """goal 关键词 -> Skill id 映射骨架。
 
-    下一轮预写业务例程时填充：{"提取岗位"/"搜索职位" -> "boss.extract_jobs",
-    "发送消息"/"回复" -> "boss.chat"}。本轮统一走 browser.generic，
-    由兜底按 goal 意图处理。
+def _map_goal_to_skill_id(goal: str) -> str:
+    """goal 关键词 -> Skill id。
+
+    命中关键词则派发到垂直服务（boss.extract_jobs / boss.chat）或只读例程
+    （browser.load_more）；否则回退 browser.generic（例程 → 双层兜底）。
+    兜底只读，不自动写操作（红线见 _dispatch_chat 的 approved 门控）。
     """
+    g = goal.lower()
+    if any(k in g for k in _LOAD_MORE_KEYWORDS):
+        return "browser.load_more"
+    if any(k in g for k in _EXTRACT_KEYWORDS):
+        return "boss.extract_jobs"
+    if any(k in g for k in _CHAT_KEYWORDS):
+        return "boss.chat"
     return "browser.generic"
+
+
+# boss.chat 操作意图关键词（goal 子串 → operation：list/messages/send）
+_CHAT_SEND_WORDS = ("发送", "回复")
+_CHAT_LIST_WORDS = ("同步", "会话", "列表")
+_CHAT_MESSAGES_WORDS = ("拉取", "读取", "查看", "历史")
+
+
+def _derive_chat_operation(goal: str) -> str:
+    """从 goal 推测 chat operation；默认 messages（只读更安全，避免误触发写操作）。"""
+    g = goal.lower()
+    if any(w in g for w in _CHAT_SEND_WORDS):
+        return "send"
+    if any(w in g for w in _CHAT_LIST_WORDS):
+        return "list"
+    if any(w in g for w in _CHAT_MESSAGES_WORDS):
+        return "messages"
+    return "messages"
 
 
 class SkillExecutor:
@@ -58,12 +94,22 @@ class SkillExecutor:
         locks: LockManager | None = None,
         fallback_llm: FallbackLLM | None = None,
         settings: Settings | None = None,
+        chat_service: Any | None = None,  # noqa: ANN401 - 垂直服务 duck-typing（BossChatService 鸭子类型）
+        extract_service: Any | None = None,  # noqa: ANN401 - BossExtractService 鸭子类型
     ) -> None:
         self._adapter = adapter
-        self._registry = registry or RoutineRegistry()
+        if registry is None:
+            # 自建 registry：自动注册内置只读例程（如 jobs.load_more）；注入的 registry 由调用方决定注册
+            registry = RoutineRegistry()
+            for routine in builtin_readonly_routines():
+                registry.register(routine)
+        self._registry = registry
         self._locks = locks or LockManager()
         self._fallback_llm = fallback_llm
         self._settings = settings or get_settings()
+        # 垂直服务派发（duck-typing；None = 未接线，命中则报错而非退化）
+        self._chat_service = chat_service
+        self._extract_service = extract_service
         self._runner = RoutineRunner(adapter) if adapter is not None else None
         self._adaptive = AdaptiveFallback(adapter) if adapter is not None else None
         self._llm_fallback = (
@@ -92,6 +138,9 @@ class SkillExecutor:
             return self._failed(call.skill, msg, ERROR_KIND_RULE_VIOLATION)
         try:
             async with self._locks.browser():
+                dispatched = await self._dispatch(call)
+                if dispatched is not None:
+                    return dispatched
                 routine = self._registry.get_by_skill(call.skill)
                 if routine is not None:
                     result = await self._run_routine(routine, call.args or {}, call.skill)
@@ -108,6 +157,83 @@ class SkillExecutor:
             logger.exception("skill execute unexpected error", extra={"skill": call.skill, "goal": goal})
             msg = f"Skill 执行异常: {exc}"
             return self._failed(call.skill, msg, ERROR_KIND_DOM_CHANGE)
+
+    # ------------------------------------------------------------------
+    # 垂直服务派发（boss.chat / boss.extract_jobs）
+    # ------------------------------------------------------------------
+    async def _dispatch(self, call: SkillCall) -> ToolResult | None:
+        """按 skill 派发到垂直服务；非垂直 skill 返回 None（走例程/兜底）。
+
+        服务未接线时返回明确失败（RuleViolation），不静默退化到通用兜底——
+        退化会把垂直意图误判为普通浏览，比直接报错更糟（现状 gap）。
+        """
+        if call.skill == "boss.chat":
+            if self._chat_service is None:
+                return self._failed(
+                    call.skill,
+                    "垂直服务未接线：boss.chat（缺少 chat_service 注入）",
+                    ERROR_KIND_RULE_VIOLATION,
+                )
+            return await self._dispatch_chat(call)
+        if call.skill == "boss.extract_jobs":
+            if self._extract_service is None:
+                return self._failed(
+                    call.skill,
+                    "垂直服务未接线：boss.extract_jobs（缺少 extract_service 注入）",
+                    ERROR_KIND_RULE_VIOLATION,
+                )
+            return await self._dispatch_extract(call)
+        return None
+
+    async def _dispatch_chat(self, call: SkillCall) -> ToolResult:
+        """派发到 BossChatService.run；send 走 approved 红线（dispatch 层不新增自动审批）。"""
+        args = call.args or {}
+        operation = str(args.get("operation") or _derive_chat_operation(call.goal or ""))
+        user_id = int(args.get("user_id", 1))
+        approved = bool(args.get("approved", False))
+        result = await self._chat_service.run(
+            user_id=user_id,
+            operation=operation,
+            approved=approved,
+            text=args.get("text"),
+            external_id=args.get("external_id"),
+        )
+        # 红线：send 未审批 = 规则违规（无论 service 返回什么文本，彻底不可重试）
+        if operation == "send" and not approved:
+            error = getattr(result, "error", None) or "发送未被审批（approved=False）"
+            return self._failed(call.skill, error, ERROR_KIND_RULE_VIOLATION)
+        return self._skill_result_to_graph(result, call.skill)
+
+    async def _dispatch_extract(self, call: SkillCall) -> ToolResult:
+        """派发到 BossExtractService.run（提取 → 筛选 → 落库）。"""
+        args = call.args or {}
+        user_id = int(args.get("user_id", 1))
+        result = await self._extract_service.run(
+            user_id=user_id,
+            source=str(args.get("source", "page")),
+            jobs=args.get("jobs"),
+            rules_override=args.get("rules_override"),
+            ingest=bool(args.get("ingest", True)),
+            limit=int(args.get("limit", 15)),
+        )
+        return self._skill_result_to_graph(result, call.skill)
+
+    @staticmethod
+    def _skill_result_to_graph(result: Any, skill: str) -> ToolResult:  # noqa: ANN401 - 垂直服务返回结果 duck-typings
+        """垂直服务 SkillResult{ok,data,error} -> 图内 ToolResult。
+
+        鸭子类型（两技能各自定义 SkillResult）；失败按文本分类 error_kind。
+        """
+        if getattr(result, "ok", False):
+            return ToolResult(ok=True, data=getattr(result, "data", None), error=None, error_kind=None, skill=skill)
+        error = getattr(result, "error", None) or "垂直工具执行失败"
+        return ToolResult(
+            ok=False,
+            data=getattr(result, "data", None),
+            error=error,
+            error_kind=_classify_error(error),
+            skill=skill,
+        )
 
     # ------------------------------------------------------------------
     # 例程主路径

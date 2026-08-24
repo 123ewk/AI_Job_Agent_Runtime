@@ -99,6 +99,8 @@ def make_executor(
     llm: FakeFallbackLLM | None = None,
     locks: LockManager | None = None,
     settings: Settings | None = None,
+    chat_service: Any | None = None,  # noqa: ANN401 - duck-typed 垂直服务
+    extract_service: Any | None = None,  # noqa: ANN401 - duck-typed 垂直服务
 ) -> SkillExecutor:
     return SkillExecutor(
         adapter=adapter,
@@ -106,6 +108,8 @@ def make_executor(
         locks=locks or LockManager(),
         fallback_llm=llm,
         settings=settings or make_settings(),
+        chat_service=chat_service,
+        extract_service=extract_service,
     )
 
 
@@ -302,3 +306,186 @@ class TestEdgeCases:
         call = executor.map_goal_to_skill("读取当前页面")
         assert call.skill == "browser.generic"
         assert call.goal == "读取当前页面"
+
+
+@dataclass
+class FakeSkillResult:
+    """垂直服务 SkillResult{ok,data,error} 鸭子类型。"""
+
+    ok: bool
+    data: dict[str, Any] | None = None
+    error: str | None = None
+
+
+class FakeChatService:
+    """BossChatService 鸭子类型：记录调用；send 未审批按服务红线拒绝。"""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def run(
+        self,
+        *,
+        user_id: int,
+        operation: str,
+        approved: bool = False,
+        text: str | None = None,
+        external_id: str | None = None,
+        **_: Any,  # noqa: ANN401 - 透传会话/消息 raw 数据
+    ) -> FakeSkillResult:
+        self.calls.append(
+            {"user_id": user_id, "operation": operation, "approved": approved, "text": text, "external_id": external_id}
+        )
+        if operation == "send" and not approved:
+            return FakeSkillResult(ok=False, error="发送属高危写操作：approved 必须为 True（先走 doc 14 审批流）")
+        return FakeSkillResult(ok=True, data={"operation": operation})
+
+
+class FakeExtractService:
+    """BossExtractService 鸭子类型：记录调用，成功返回。"""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def run(self, *, user_id: int, source: str = "page", **_: Any) -> FakeSkillResult:  # noqa: ANN401 - 透传 raw
+        self.calls.append({"user_id": user_id, "source": source})
+        return FakeSkillResult(ok=True, data={"source": source})
+
+
+class TestMapGoalToSkillKeywords:
+    async def test_extract_keywords_map_to_extract(self) -> None:
+        executor = make_executor(adapter=FakeAdapter())
+        for goal in ("提取岗位", "搜索职位", "抓取岗位", "拉取职位"):
+            call = executor.map_goal_to_skill(goal)
+            assert call.skill == "boss.extract_jobs", goal
+
+    async def test_chat_keywords_map_to_chat(self) -> None:
+        executor = make_executor(adapter=FakeAdapter())
+        for goal in ("发送消息", "发消息", "回复", "拉取消息", "同步会话"):
+            call = executor.map_goal_to_skill(goal)
+            assert call.skill == "boss.chat", goal
+
+    async def test_load_more_keywords_map_to_load_more(self) -> None:
+        executor = make_executor(adapter=FakeAdapter())
+        for goal in ("加载更多", "翻页", "下一页", "滚动"):
+            call = executor.map_goal_to_skill(goal)
+            assert call.skill == "browser.load_more", goal
+
+    async def test_generic_goal_stays_generic(self) -> None:
+        executor = make_executor(adapter=FakeAdapter())
+        for goal in ("读取当前页面", "分析页面内容"):
+            assert executor.map_goal_to_skill(goal).skill == "browser.generic", goal
+
+
+class TestVerticalDispatchChat:
+    async def test_send_without_approval_is_rule_violation(self) -> None:
+        adapter = FakeAdapter()
+        chat = FakeChatService()
+        executor = make_executor(adapter=adapter, chat_service=chat)
+
+        result = await executor.execute(
+            SkillCall(skill="boss.chat", args={"text": "你好"}, goal="发送消息")
+        )
+
+        assert result.ok is False
+        assert result.error_kind == ERROR_KIND_RULE_VIOLATION
+        assert "approved" in (result.error or "")
+        # 派发层不新增自动审批：service 收到的 approved 为 False
+        assert chat.calls[0]["operation"] == "send"
+        assert chat.calls[0]["approved"] is False
+        # dispatch 命中，不触碰浏览器工具 / 兜底
+        assert adapter.calls == []
+
+    async def test_messages_goal_is_read_only_success(self) -> None:
+        chat = FakeChatService()
+        executor = make_executor(adapter=FakeAdapter(), chat_service=chat)
+
+        result = await executor.execute(SkillCall(skill="boss.chat", args={}, goal="拉取消息"))
+
+        assert result.ok is True
+        assert chat.calls[0]["operation"] == "messages"
+        assert result.data == {"operation": "messages"}
+
+    async def test_send_with_approval_and_text_allowed(self) -> None:
+        chat = FakeChatService()
+        executor = make_executor(adapter=FakeAdapter(), chat_service=chat)
+
+        result = await executor.execute(
+            SkillCall(skill="boss.chat", args={"text": "你好，方便聊聊吗", "approved": True}, goal="发送消息")
+        )
+
+        assert result.ok is True
+        assert chat.calls[0]["operation"] == "send"
+        assert chat.calls[0]["approved"] is True
+        assert chat.calls[0]["text"] == "你好，方便聊聊吗"
+
+    async def test_explicit_operation_takes_precedence(self) -> None:
+        chat = FakeChatService()
+        executor = make_executor(adapter=FakeAdapter(), chat_service=chat)
+
+        await executor.execute(
+            SkillCall(skill="boss.chat", args={"operation": "list"}, goal="发送消息")
+        )
+
+        assert chat.calls[0]["operation"] == "list"
+
+
+class TestVerticalDispatchExtract:
+    async def test_extract_dispatched_to_service(self) -> None:
+        extract = FakeExtractService()
+        executor = make_executor(adapter=FakeAdapter(), extract_service=extract)
+
+        result = await executor.execute(SkillCall(skill="boss.extract_jobs", args={}, goal="提取岗位"))
+
+        assert result.ok is True
+        assert extract.calls[0]["user_id"] == 1
+        assert extract.calls[0]["source"] == "page"
+
+
+class TestUnwiredVerticalServices:
+    async def test_chat_without_service_is_rule_violation(self) -> None:
+        executor = make_executor(adapter=FakeAdapter())  # 无 chat_service
+
+        result = await executor.execute(SkillCall(skill="boss.chat", args={}, goal="发送消息"))
+
+        assert result.ok is False
+        assert result.error_kind == ERROR_KIND_RULE_VIOLATION
+        assert "垂直服务未接线" in (result.error or "")
+
+    async def test_extract_without_service_is_rule_violation(self) -> None:
+        executor = make_executor(adapter=FakeAdapter())  # 无 extract_service
+
+        result = await executor.execute(SkillCall(skill="boss.extract_jobs", args={}, goal="提取岗位"))
+
+        assert result.ok is False
+        assert result.error_kind == ERROR_KIND_RULE_VIOLATION
+        assert "垂直服务未接线" in (result.error or "")
+
+
+class TestBuiltinReadonlyRoutine:
+    LOAD_MORE_TREE = (
+        '"Page: BOSS\\nURL: https://www.zhipin.com/\\n\\n'
+        '  [ref_1 button \\"加载更多\\"]\\n'
+        '  [ref_2 button \\"下一页\\"]\\n"'
+    )
+
+    def test_default_registry_registers_load_more(self) -> None:
+        adapter = FakeAdapter()
+        executor = make_executor(adapter=adapter)  # 不注入 registry -> 默认注册内置例程
+        routine = executor._registry.get_by_skill("browser.load_more")
+        assert routine is not None
+        assert routine.id == "jobs.load_more"
+        assert routine.steps[0].tool == "chrome_click_element"
+        assert routine.steps[0].target.label_contains == "加载更多"
+
+    async def test_load_more_routine_clicks_feature_matched_button(self) -> None:
+        adapter = FakeAdapter()
+        adapter._tree = self.LOAD_MORE_TREE
+        executor = make_executor(adapter=adapter)
+
+        result = await executor.execute(SkillCall(skill="browser.load_more", args={}, goal="加载更多"))
+
+        assert result.ok is True
+        click_calls = [(name, a) for name, a in adapter.calls if name == "chrome_click_element"]
+        assert len(click_calls) == 1
+        assert click_calls[0][1]["ref"] == "ref_1"
