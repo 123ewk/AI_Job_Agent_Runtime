@@ -59,6 +59,8 @@ class MockSettings:
     """
 
     database_url = TEST_DB_URL
+    # psycopg 方言（langgraph AsyncPostgresSaver 用）：去掉 asyncpg 方言段
+    database_dsn = TEST_DB_URL.replace("postgresql+asyncpg://", "postgresql://")
     redis_url = "redis://localhost:6379/1"
     app_name = "AI Career Copilot (Test)"
     app_env = AppEnv.TEST

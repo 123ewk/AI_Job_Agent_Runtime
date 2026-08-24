@@ -165,6 +165,21 @@ class Settings(BaseSettings):
         )
 
     @property
+    def database_dsn(self) -> str:
+        """psycopg（libpq）DSN：langgraph AsyncPostgresSaver.from_conn_string 用。
+
+        与 database_url 的区别：database_url 是 SQLAlchemy asyncpg 方言
+        （``postgresql+asyncpg://``），psycopg 的 conninfo 解析不认 ``+asyncpg`` 方言
+        （实测报 ``missing "=" after ... in connection info string``）。存档器直接吃
+        libpq URI（``postgresql://``），故单独提供 psycopg 方言。
+        """
+        password = quote_plus(self.postgres_password)
+        return (
+            f"postgresql://{self.postgres_user}:{password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @property
     def browser_mcp_url_whitelist_list(self) -> list[str]:
         """将逗号分隔的 URL 白名单解析为列表。"""
         return [

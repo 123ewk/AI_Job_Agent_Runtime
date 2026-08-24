@@ -43,6 +43,38 @@ _READY_TIMEOUT_S = 10.0
 _PROC_STOP_GRACE_S = 3.0
 
 
+class _ThreadedPopen:
+    """``asyncio.subprocess.Process`` 的轻量替代：把阻塞的 Popen 生命周期丢线程。
+
+    **为什么不用 ``asyncio.create_subprocess_exec``**：asyncio 子进程在 Windows 上
+    仅 ``ProactorEventLoop`` 支持；而 psycopg async 连库恰恰要求 ``SelectorEventLoop``
+    （依赖 ``add_reader``）。两者在单个事件循环上互斥，但后端仍需自己托管 Node MCP
+    子进程（项目自洽、协作方无需单独装 MCP）。故用线程托底 Popen——spawn 同步、
+    ``wait`` 进线程、``terminate/kill`` 同步，全套不依赖 Proactor，Selector 下同样
+    能自拉子进程，冲突消解。
+    """
+
+    def __init__(self, popen: subprocess.Popen[bytes]) -> None:
+        self._pop = popen
+        self.pid = popen.pid
+
+    @property
+    def returncode(self) -> int | None:
+        # Popen.returncode 只在 wait/poll 后刷新；先 poll 再取值，保持
+        # ``returncode is None == running`` 的既有语义。
+        return self._pop.poll()
+
+    async def wait(self) -> None:
+        # Popen.wait() 阻塞调用 -> 丢进线程，避免卡死 Selector 事件循环
+        await asyncio.to_thread(self._pop.wait)
+
+    def terminate(self) -> None:
+        self._pop.terminate()
+
+    def kill(self) -> None:
+        self._pop.kill()
+
+
 class McpServerError(RuntimeError):
     """MCP 协议层错误（server 返回 isError / jsonrpc error）。"""
 
@@ -87,7 +119,7 @@ class BrowserMcpClient:
         self._token = resolve_token(self.settings)
         self._http_factory = http_client_factory  # 测试注入用
         self._http: httpx.AsyncClient | None = None
-        self._proc: asyncio.subprocess.Process | None = None
+        self._proc: _ThreadedPopen | None = None
         # 是否托管该 server：True = 自己 spawn 或接管复用（健康检查 + 崩溃重启）。
         # False = 从未启动。复用的外部 server 不设 _proc，stop 不杀它。
         self._managed = False
@@ -234,15 +266,18 @@ class BrowserMcpClient:
 
         log_file = Path(server_path).parent / "mcp-server.log"
         fh = log_file.open("a", encoding="utf-8")
-        # 注意：Windows 下加 CREATE_NO_WINDOW，避免每次启动弹黑色控制台窗口
-        self._proc = await asyncio.create_subprocess_exec(
-            "node",
-            str(server_path),
+        # 线程 Popen 自拉 Node MCP server（后端自己托管，协作方无需另装 MCP）。
+        # 不用 asyncio.create_subprocess_exec —— Windows Selector 环不支持 asyncio
+        # 子进程；Popen 同步拉起 + wait 进线程，Selector 下同样可自拉，兼容 psycopg。
+        # Windows 下加 CREATE_NO_WINDOW，避免每次启动弹黑色控制台窗口。
+        popen = subprocess.Popen(
+            ["node", str(server_path)],
             env=env,
             stdout=fh,
             stderr=subprocess.STDOUT,
             creationflags=WINDOWS_NO_WINDOW,
         )
+        self._proc = _ThreadedPopen(popen)
         logger.info("browser_mcp_spawned", path=str(server_path), pid=self._proc.pid)
 
     async def _wait_ready(self) -> None:

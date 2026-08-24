@@ -92,7 +92,7 @@ class CheckpointStore:
         # 收口默认仓库构造：TaskCheckpointIndexRepository(session) 本身即 Callable，免 lambda
         self._repo_factory = repo_factory or TaskCheckpointIndexRepository
         self._saver_factory = saver_factory
-        self._dsn = dsn or get_settings().database_url
+        self._dsn = dsn or get_settings().database_dsn
         # 内部态用 Any：真实现(AsyncPostgresSaver)与测试 mock 都带 setup()，
         # BaseCheckpointSaver 基类未声明 setup()，严格类型会误报 union-attr。
         # 公开插口仍以 checkpointer 属性收敛为 BaseCheckpointSaver[Any]。
