@@ -30,6 +30,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
 from app import __version__
+from app.agent.integration import ChatStoreAdapter, JobStoreAdapter, SettingsStoreAdapter
 from app.agent.runtime.checkpoint_store import CheckpointStore
 from app.agent.runtime.engine_registry import clear_runtime_engine, set_runtime_engine
 from app.agent.runtime.lock_manager import LockManager
@@ -102,9 +103,20 @@ async def _assemble_agent_runtime(app: FastAPI) -> _AgentRuntime:
         fallback_llm = await create_fallback_llm_from_settings(
             get_session_factory(), user_id=_DEFAULT_USER_ID
         )
-        # 垂直服务接线：注入共享 adapter（chrome_javascript 已授权），复用同一把浏览器锁
-        chat_service = BossChatService(adapter=adapter)
-        extract_service = BossExtractService(adapter=adapter)
+        # 垂直服务接线：注入共享 adapter（chrome_javascript 已授权），复用同一把浏览器锁。
+        # 三件套（job_service/store/settings_service）经瘦适配器接 backend Service，
+        # 激活技能「读取即落库」的持久化接线点（见 app/agent/integration.py）。每个适配器
+        # 方法新开短 session，长图执行不占死连接池。
+        session_factory = get_session_factory()
+        chat_service = BossChatService(
+            adapter=adapter,
+            store=ChatStoreAdapter(session_factory),
+        )
+        extract_service = BossExtractService(
+            adapter=adapter,
+            job_service=JobStoreAdapter(session_factory),
+            settings_service=SettingsStoreAdapter(session_factory),
+        )
         skills = SkillExecutor(
             adapter=adapter,
             locks=locks,
