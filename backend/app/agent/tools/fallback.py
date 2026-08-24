@@ -290,8 +290,16 @@ class LLMFallback:
         self._settings = settings or get_settings()
 
     async def run(self, goal: str) -> AdapterToolResult | None:
-        """执行 LLM 兜底；成功返回最后观察结果，失败/无 LLM 返回 None。"""
+        """执行 LLM 兜底；成功返回最后观察结果，失败/无 LLM 返回 None。
+
+        写操作（发送/提交/回车）命中 `_SEND_WORDS` 时**代码层硬拦**：即使 LLM 在被提示词
+        约束前也可能提议 chrome_fill_or_select + chrome_keyboard(Enter)（均在 _FALLBACK_TOOLS
+        内），这里与 AdaptiveFallback 对齐，直接返回 None 升级、绝不自动触发射发类副作用。
+        """
         if self._llm is None:
+            return None
+        if any(word in goal.lower() for word in _SEND_WORDS):
+            # 写操作不自动执行：交给预写例程 + 审批流（doc 14 红线，对齐 AdaptiveFallback）
             return None
         last_error: str | None = None
         last_result: AdapterToolResult | None = None

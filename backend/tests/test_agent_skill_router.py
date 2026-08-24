@@ -249,14 +249,42 @@ class TestNoRoutineFallback:
         )
         executor = make_executor(adapter=adapter, llm=llm)
 
+        # 良性目标（无写操作词，adaptive 无法匹配 -> 升级 LLM）验证 LLM 兜底机制确实会触发
         result = await executor.execute(
-            SkillCall(skill="browser.generic", args={"goal": "点击发送按钮"}, goal="点击发送按钮")
+            SkillCall(skill="browser.generic", args={"goal": "了解这个页面"}, goal="了解这个页面")
         )
 
         assert result.ok is True
         assert llm.calls, "LLM 兜底应被调用"
         tool_names = [name for name, _ in adapter.calls]
         assert "chrome_click_element" in tool_names
+
+    async def test_llm_fallback_hard_blocks_send_goal(self) -> None:
+        """LLM 兜底代码层硬拦写操作：goal 含发送词直接返回 None，不进 ReAct、不调用 LLM。"""
+        from app.agent.tools.fallback import LLMFallback
+
+        adapter = FakeAdapter()
+        llm = FakeFallbackLLM()
+        fb = LLMFallback(adapter, llm, max_steps=3, settings=make_settings())
+
+        # 直接调 LLMFallback.run：绕过 adaptive，专门验证本层硬拦
+        result = await fb.run("给 HR 发送消息")
+
+        assert result is None
+        assert llm.calls == []  # 未进入 ReAct，未调用 LLM
+
+    async def test_llm_fallback_benign_goal_still_runs(self) -> None:
+        """非写操作目标不受影响：LLM 兜底照常进入 ReAct。"""
+        from app.agent.tools.fallback import LLMFallback
+
+        adapter = FakeAdapter()
+        llm = FakeFallbackLLM()
+        fb = LLMFallback(adapter, llm, max_steps=3, settings=make_settings())
+
+        result = await fb.run("了解这个页面")
+
+        assert result is not None
+        assert llm.calls, "良性目标应触发 LLM decide"
 
     async def test_fallback_mode_off_returns_error(self) -> None:
         adapter = FakeAdapter()
