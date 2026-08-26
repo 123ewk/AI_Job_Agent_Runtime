@@ -131,13 +131,10 @@ class ApprovalService(BaseService):
             expires_at=expires_at.isoformat(),
         )
 
-        # 3. TODO: 触发 LangGraph Interrupt，写 Checkpoint
-
-        # 4. TODO: Task 状态 -> waiting_approval（需 TaskService 注入依赖）
-
-        # 5. TODO: WebSocket 推送 approval.required 事件
-
-        # 6. 启动超时定时器（后台异步执行，不阻塞当前事务）
+        # 本服务只管落库 + 启动超时定时器。编排（LangGraph Interrupt 写 Checkpoint /
+        # Task -> waiting_approval / WebSocket 推送 approval.required）已在上层
+        # WorkflowEngine.create_approval（workflow_engine.py:158-190）做全，此处不再重复。
+        # 启动超时定时器（后台异步执行，不阻塞当前事务）
         # 注意：在事务内部启动定时器可能导致超时触发时 Approval 还未提交
         # 实际生产环境建议使用事务 commit 事件回调，或使用消息队列
         self._start_timeout_timer(approval.id, expires_seconds)

@@ -64,12 +64,16 @@
 
 ---
 
-## D. 过时注释（非缺口，但误导，顺手清理）
+## D. 过时注释（非缺口，但误导，顺手清理） [x] ✅ 已修（2026-08-26）
 
 - **`app/service/approval.py:134-138`** `create()` 步骤 3/4/5 的 TODO：声称"触发 Interrupt /
   Task->waiting_approval / 推 WS"未做。**实际编排已在 `WorkflowEngine.create_approval`
   （`workflow_engine.py:158-190`）做全**：emit `approval.required` + 落库 + 状态流转都接了。
   → 删这几行 TODO，改为注释"编排在上层 WorkflowEngine，本服务只管落库"。
+
+**✅ 改了什么（2026-08-26）**：`app/service/approval.py` create() 删步骤 3/4/5 三行为证 TODO，改一行注释
+「本服务只管落库 + 启动超时定时器；编排（Interrupt/Task->waiting_approval/WS approval.required）已在上层
+WorkflowEngine.create_approval 做全」。**结果：ruff 全绿；`tests/test_tasks_api.py -k approval` 5 passed**。
 
 ---
 
