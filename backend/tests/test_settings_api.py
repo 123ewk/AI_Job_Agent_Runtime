@@ -92,7 +92,7 @@ class TestSettingsAPI:
     async def test_get_all_settings(self, client: AsyncClient) -> None:
         """获取全量配置。
 
-        期望：返回 4 个分类的列表，每项含 category + settings，
+        期望：返回 5 个分类的列表，每项含 category + settings，
         缺失配置自动填充默认值。
         """
         resp = await client.get(self.BASE_URL)
@@ -100,14 +100,21 @@ class TestSettingsAPI:
         data = resp.json()
 
         assert isinstance(data, list)
-        assert len(data) == 4
+        assert len(data) == 5
         categories = {item["category"] for item in data}
-        assert categories == {"llm", "agent", "job_rule", "reply_style"}
+        assert categories == {"llm", "agent", "job_rule", "reply_style", "embedding"}
 
         # llm 分类应含 provider 默认值
         llm_cat = next(item for item in data if item["category"] == "llm")
         llm_keys = {s["key"] for s in llm_cat["settings"]}
         assert "provider" in llm_keys
+
+        # embedding 分类应含向量模型默认值（隐式 512 维，无 dimension 键）
+        emb_cat = next(item for item in data if item["category"] == "embedding")
+        emb_map = {s["key"]: s["value"] for s in emb_cat["settings"]}
+        assert emb_map["provider"] == "openai"
+        assert emb_map["model"] == "text-embedding-3-small"
+        assert "api_key" in emb_map
 
     async def test_get_llm_config(self, client: AsyncClient) -> None:
         """获取 LLM 分类配置。"""
@@ -412,6 +419,98 @@ class TestSettingsAPI:
         assert resp.json()["ok"] is True
         assert resp.json()["detail"] is None
 
+    async def test_get_embedding_config_defaults(self, client: AsyncClient) -> None:
+        """GET /settings/embedding 未配置时返回默认向量模型。"""
+        resp = await client.get(f"{self.BASE_URL}/embedding")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["provider"] == "openai"
+        assert data["model"] == "text-embedding-3-small"
+        assert "api_key_masked" in data
+
+    async def test_update_embedding_config(self, client: AsyncClient) -> None:
+        """PUT /settings/embedding 保存向量模型配置，返回掩码 key。"""
+        resp = await client.put(
+            f"{self.BASE_URL}/embedding",
+            json={
+                "provider": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "model": "text-embedding-3-small",
+                "api_key": "sk-emb-key-12345",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["provider"] == "openai"
+        assert data["model"] == "text-embedding-3-small"
+        assert data["base_url"] == "https://api.openai.com/v1"
+        assert data["api_key_masked"] is not None
+        assert "sk-emb-key-12345" not in (data["api_key_masked"] or "")
+
+    async def test_embedding_api_key_stored_encrypted(
+        self,
+        client: AsyncClient,
+        test_session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """embedding.api_key 落库为密文（与 llm.api_key 同规，泛化加密回归）。
+
+        PUT 后直查 settings 表，断言 value 带 encrypted 标记且不含明文。
+        """
+        plain_key = "sk-emb-encrypt-987654321"
+        put_resp = await client.put(
+            f"{self.BASE_URL}/embedding",
+            json={
+                "provider": "openai",
+                "base_url": None,
+                "model": "text-embedding-3-small",
+                "api_key": plain_key,
+            },
+        )
+        assert put_resp.status_code == 200
+
+        from sqlalchemy import select
+
+        from app.models.setting import Setting
+
+        async with test_session_factory() as session:
+            result = await session.execute(
+                select(Setting).where(Setting.category == "embedding", Setting.key == "api_key")
+            )
+            setting = result.scalar_one()
+            stored = setting.value
+            assert isinstance(stored, dict)
+            assert stored.get("encrypted") is True
+            assert plain_key not in str(stored["value"])
+
+        # GET 应返回掩码（既非明文也非密文）
+        get_resp = await client.get(f"{self.BASE_URL}/embedding")
+        assert get_resp.status_code == 200
+        masked = get_resp.json()["api_key_masked"]
+        assert masked is not None
+        assert plain_key not in masked
+
+    async def test_get_all_masks_embedding_api_key(self, client: AsyncClient) -> None:
+        """GET /settings 全量列表不得泄露 embedding.api_key 明文（泛化掩码回归）。"""
+        plain_key = "sk-emb-leak-1234567890"
+        await client.put(
+            f"{self.BASE_URL}/embedding",
+            json={
+                "provider": "openai",
+                "base_url": None,
+                "model": "text-embedding-3-small",
+                "api_key": plain_key,
+            },
+        )
+
+        resp = await client.get(self.BASE_URL)
+        assert resp.status_code == 200
+        data = resp.json()
+
+        emb_cat = next(item for item in data if item["category"] == "embedding")
+        api_key_item = next(s for s in emb_cat["settings"] if s["key"] == "api_key")
+        assert api_key_item["value"] != plain_key
+        assert plain_key not in (api_key_item["value"] or "")
+
 
 class TestActiveConfigPushAPI:
     """活动配置推送端点测试（方案 A /settings/active，本机限定）。"""
@@ -422,6 +521,7 @@ class TestActiveConfigPushAPI:
         set_active_config("llm", {})
         set_active_config("job_rule", {})
         set_active_config("reply_style", {})
+        set_active_config("embedding", {})
 
     async def test_push_active_writes_registry(self, client: AsyncClient) -> None:
         """本机推送 llm（含明文 api_key）→ 落注册表，响应不回吐 key。"""
@@ -473,6 +573,28 @@ class TestActiveConfigPushAPI:
         job_rule = get_active_config("job_rule")
         assert job_rule["min_salary"] == 20
         assert job_rule["max_salary"] == 50
+
+    async def test_push_active_embedding_section(self, client: AsyncClient) -> None:
+        """推送 embedding 段（含明文 api_key）→ 落注册表，响应不回吐 key。"""
+        self._clear_registry()
+        resp = await client.post(
+            f"{self.BASE_URL}/active",
+            json={
+                "embedding": {
+                    "provider": "openai",
+                    "base_url": None,
+                    "model": "text-embedding-3-small",
+                    "api_key": "sk-emb-local-plaintext",
+                }
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+        emb = get_active_config("embedding")
+        assert emb["api_key"] == "sk-emb-local-plaintext"
+        assert emb["model"] == "text-embedding-3-small"
+        # 响应体绝不含明文 key
+        assert "sk-emb-local-plaintext" not in resp.text
 
     async def test_push_non_local_rejected(self) -> None:
         """非本机来源直接拒绝（伪造 scope 直调路由函数断言抛 BadRequestError）。"""

@@ -19,7 +19,7 @@ import threading
 from typing import Any
 
 # 允许的活动配置种类（key 白名单，防非法 kind 写入）
-ALLOWED_KINDS: frozenset[str] = frozenset({"llm", "job_rule", "reply_style"})
+ALLOWED_KINDS: frozenset[str] = frozenset({"llm", "job_rule", "reply_style", "embedding"})
 
 _lock = threading.Lock()
 _active: dict[str, dict[str, Any]] = {}

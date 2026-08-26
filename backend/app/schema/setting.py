@@ -32,7 +32,7 @@ class SettingCategoryResponse(BaseSchema):
 
 # 允许批量更新的分类白名单（与 CONFIG_DEFAULTS / Service 层对齐）
 _ALLOWED_BATCH_CATEGORIES: frozenset[str] = frozenset(
-    {"llm", "agent", "job_rule", "reply_style"}
+    {"llm", "agent", "job_rule", "reply_style", "embedding"}
 )
 
 
@@ -92,6 +92,35 @@ class LLMConfigResponse(BaseSchema):
     model: str = Field(..., description="模型名称")
     api_key_masked: str | None = Field(None, description="API Key 掩码（如 sk-...xxxx）")
     temperature: float = Field(..., description="采样温度")
+
+
+# -----------------------------------------------------------------------------
+# 向量模型配置（category = "embedding"）
+# -----------------------------------------------------------------------------
+
+class EmbeddingConfigUpdate(BaseSchema):
+    """向量模型配置更新请求。
+
+    隐式 512 维：记忆库 embedding 列为 Vector(512)，模型输出维度必须一致，
+    故表单不暴露 dimension 字段，运行时校验维度不符即降级（见 MemoryService）。
+    """
+
+    provider: str = Field("openai", description="向量模型提供商")
+    base_url: str | None = Field(None, description="API Base URL（OpenAI 兼容 /embeddings 协议）")
+    model: str = Field("text-embedding-3-small", description="向量模型名称")
+    api_key: str = Field(..., description="API Key（加密存储）")
+
+
+class EmbeddingConfigResponse(BaseSchema):
+    """向量模型配置响应。
+
+    注意：不返回 api_key 明文，仅返回掩码后的标识。
+    """
+
+    provider: str = Field(..., description="向量模型提供商")
+    base_url: str | None = Field(None, description="API Base URL")
+    model: str = Field(..., description="向量模型名称")
+    api_key_masked: str | None = Field(None, description="API Key 掩码")
 
 
 # -----------------------------------------------------------------------------
@@ -201,3 +230,4 @@ class ActiveConfigPush(BaseSchema):
     llm: LLMConfigUpdate | None = Field(None, description="活动 LLM 配置")
     job_rule: JobRuleConfigUpdate | None = Field(None, description="活动求职规则")
     reply_style: ReplyStyleConfigUpdate | None = Field(None, description="活动回复风格")
+    embedding: EmbeddingConfigUpdate | None = Field(None, description="活动向量模型配置")

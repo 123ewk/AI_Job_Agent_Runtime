@@ -23,6 +23,8 @@ from app.repository.setting import SettingRepository
 from app.schema.setting import (
     AgentConfigResponse,
     AgentConfigUpdate,
+    EmbeddingConfigResponse,
+    EmbeddingConfigUpdate,
     JobRuleConfigResponse,
     JobRuleConfigUpdate,
     LLMConfigResponse,
@@ -66,6 +68,12 @@ CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "length_preference": "medium",
         "include_greeting": True,
         "include_closing": True,
+    },
+    "embedding": {
+        "provider": "openai",
+        "base_url": None,
+        "model": "text-embedding-3-small",
+        "api_key": None,
     },
 }
 
@@ -159,7 +167,8 @@ class SettingsService(BaseService):
             for key, default_value in CONFIG_DEFAULTS[category].items():
                 value = current.get(key, default_value)
                 # api_key 属高敏配置，全量列表也只返回掩码，不泄露明文
-                if category == "llm" and key == "api_key":
+                # （llm / embedding 均有 api_key 键，统一处理）
+                if key == "api_key":
                     value = _mask_api_key(value)
                 items.append(SettingItem(key=key, value=value))
             result.append(SettingCategoryResponse(category=category, settings=items))
@@ -283,6 +292,36 @@ class SettingsService(BaseService):
         await self.batch_update(user_id, "reply_style", batch)
         return await self.get_reply_style_config(user_id)
 
+    async def get_embedding_config(self, user_id: int) -> EmbeddingConfigResponse:
+        """获取向量模型配置（api_key 掩码，供设置页展示）。"""
+        current = await self._get_category_as_dict(user_id, "embedding")
+        return EmbeddingConfigResponse(
+            provider=_get_value_with_default(current, "provider", "embedding"),
+            base_url=_get_value_with_default(current, "base_url", "embedding"),
+            model=_get_value_with_default(current, "model", "embedding"),
+            api_key_masked=_mask_api_key(current.get("api_key")),
+        )
+
+    async def update_embedding_config(self, user_id: int, data: EmbeddingConfigUpdate) -> EmbeddingConfigResponse:
+        """更新向量模型配置。"""
+        items = [
+            SettingItem(key="provider", value=data.provider),
+            SettingItem(key="base_url", value=data.base_url),
+            SettingItem(key="model", value=data.model),
+            SettingItem(key="api_key", value=data.api_key),
+        ]
+        batch = SettingBatchUpdate(category="embedding", updates=items)
+        await self.batch_update(user_id, "embedding", batch)
+        return await self.get_embedding_config(user_id)
+
+    async def get_embedding_runtime_config(self, user_id: int) -> dict[str, Any]:
+        """获取向量模型运行时配置（api_key 解密后明文）。
+
+        仅供 Agent Memory 服务进程内使用（方案 A 注册表为空时回退读 DB）；
+        API 响应一律走 get_embedding_config（掩码）。
+        """
+        return await self._get_category_as_dict(user_id, "embedding")
+
     @transactional
     async def batch_update(
         self,
@@ -311,8 +350,9 @@ class SettingsService(BaseService):
             existing = await self.setting_repo.get_by_key(user_id, category, item.key)
             # value 存储为 {"value": actual_value} 结构，支持多种类型
             # api_key 属高敏配置，落库前对称加密，标记 encrypted 供读取侧解密
+            # （llm / embedding 均有 api_key 键，统一处理；读侧 _decrypt_if_needed 同按 key 判断）
             value = item.value
-            if category == "llm" and item.key == "api_key" and isinstance(value, str) and value:
+            if item.key == "api_key" and isinstance(value, str) and value:
                 value = encrypt_value(get_settings().jwt_secret_key, value)
                 value_data: dict[str, Any] = {"value": value, "encrypted": True}
             else:

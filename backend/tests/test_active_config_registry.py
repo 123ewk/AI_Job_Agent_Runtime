@@ -18,6 +18,7 @@ def _clean_registry() -> None:
     set_active_config("llm", {})
     set_active_config("job_rule", {})
     set_active_config("reply_style", {})
+    set_active_config("embedding", {})
 
 
 class TestActiveConfigRegistry:
@@ -52,5 +53,12 @@ class TestActiveConfigRegistry:
         assert get_active_config("llm")["api_key"] == "sk-b"
 
     def test_allowed_kinds_whitelist(self) -> None:
-        """白名单覆盖方案 A 三类配置。"""
-        assert {"llm", "job_rule", "reply_style"} == ALLOWED_KINDS
+        """白名单覆盖方案 A 四类配置。"""
+        assert {"llm", "job_rule", "reply_style", "embedding"} == ALLOWED_KINDS
+
+    def test_embedding_kind_roundtrip(self) -> None:
+        """embedding 种类可写入读回（向量模型配置进注册表供记忆服务取用）。"""
+        set_active_config("embedding", {"api_key": "sk-emb", "model": "text-embedding-3-small"})
+        got = get_active_config("embedding")
+        assert got["api_key"] == "sk-emb"
+        assert got["model"] == "text-embedding-3-small"

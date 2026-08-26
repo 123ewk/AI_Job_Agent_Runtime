@@ -18,6 +18,8 @@ from app.schema.setting import (
     ActiveConfigPush,
     AgentConfigResponse,
     AgentConfigUpdate,
+    EmbeddingConfigResponse,
+    EmbeddingConfigUpdate,
     JobRuleConfigResponse,
     JobRuleConfigUpdate,
     LLMConfigResponse,
@@ -54,10 +56,11 @@ async def push_active_config(request: Request, data: ActiveConfigPush) -> dict:
         set_active_config("job_rule", data.job_rule.model_dump())
     if data.reply_style is not None:
         set_active_config("reply_style", data.reply_style.model_dump())
+    if data.embedding is not None:
+        set_active_config("embedding", data.embedding.model_dump())
 
-    logger.info("active_config_pushed", extra={"sections": len(
-        [x for x in (data.llm, data.job_rule, data.reply_style) if x is not None]
-    )})
+    sections = [x for x in (data.llm, data.job_rule, data.reply_style, data.embedding) if x is not None]
+    logger.info("active_config_pushed", extra={"sections": len(sections)})
     return {"status": "ok"}
 
 
@@ -150,6 +153,29 @@ async def update_reply_style_config(
 ) -> ReplyStyleConfigResponse:
     """更新回复风格配置。"""
     return await service.update_reply_style_config(user_id, data)
+
+
+@router.get("/embedding", response_model=EmbeddingConfigResponse)
+async def get_embedding_config(
+    user_id: CurrentUserDep,
+    service: SettingsServiceDep,
+) -> EmbeddingConfigResponse:
+    """获取向量模型配置。"""
+    return await service.get_embedding_config(user_id)
+
+
+@router.put("/embedding", response_model=EmbeddingConfigResponse)
+async def update_embedding_config(
+    user_id: CurrentUserDep,
+    service: SettingsServiceDep,
+    data: EmbeddingConfigUpdate,
+) -> EmbeddingConfigResponse:
+    """更新向量模型配置。
+
+    配置后 MemoryService 用真实 embedding 做语义检索；
+    未配置时走关键词 / 精确匹配 / 时间倒序降级路径。
+    """
+    return await service.update_embedding_config(user_id, data)
 
 
 @router.put("/batch")
