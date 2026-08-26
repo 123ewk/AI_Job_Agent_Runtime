@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUserDep, MemoryServiceDep
 from app.core.logging import get_logger
@@ -65,7 +65,7 @@ async def list_conversation_memory(
     user_id: CurrentUserDep,
     service: MemoryServiceDep,
     conversation_id: int,
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=500, description="记忆数量上限"),
 ) -> list[MemoryResponse]:
     """获取某会话关联的记忆。"""
     return await service.list_by_conversation(user_id, conversation_id, limit=limit)
@@ -76,7 +76,7 @@ async def list_job_memory(
     user_id: CurrentUserDep,
     service: MemoryServiceDep,
     job_id: int,
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=500, description="记忆数量上限"),
 ) -> list[MemoryResponse]:
     """获取某岗位关联的记忆。"""
     return await service.list_by_job(user_id, job_id, limit=limit)

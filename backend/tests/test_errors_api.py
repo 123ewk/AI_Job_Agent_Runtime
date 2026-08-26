@@ -43,16 +43,21 @@ class TestErrorContract:
         data = resp.json()
         assert data["error"] == "http_error"
 
-    async def test_settings_invalid_category_returns_400(self, client: AsyncClient) -> None:
-        """非法配置分类 -> 400 + error=bad_request。"""
+    async def test_settings_invalid_category_returns_422(self, client: AsyncClient) -> None:
+        """非法配置分类 -> 422（Pydantic schema 白名单校验）。
+
+        D18 修复：分类白名单校验从 service 层 400 前移到 schema 层 422，
+        与其他参数校验语义一致（FastAPI 默认 422 契约）。
+        """
         resp = await client.put(
             f"{BASE}/settings/batch",
             json={"category": "bogus", "updates": [{"key": "k", "value": "v"}]},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         data = resp.json()
-        assert data["error"] == "bad_request"
-        assert "不支持的配置分类" in data["message"]
+        assert "detail" in data
+        assert isinstance(data["detail"], list)
+        assert any("不支持的配置分类" in str(item.get("msg", "")) for item in data["detail"])
 
     async def test_validation_error_keeps_default_422_contract(self, client: AsyncClient) -> None:
         """Pydantic 校验失败保留 FastAPI 默认 422 {"detail": [...]} 契约。"""

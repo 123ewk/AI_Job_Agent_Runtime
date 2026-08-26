@@ -39,10 +39,14 @@ class JobService(BaseService):
         self.hr_repo = HRRepository(db)
 
     @transactional
-    async def create(self, user_id: int, data: JobCreate) -> JobResponse:
+    async def create(self, user_id: int, data: JobCreate) -> tuple[JobResponse, bool]:
         """创建新职位。
 
-        同平台同 external_id 做去重，已存在则直接返回。
+        同平台同 external_id 做去重，已存在则直接返回已有记录。
+
+        Returns:
+            (职位响应, 是否为新创建)。去重命中时第二个值为 False，
+            路由层据此返回 200 而非 201。
         """
         existing = await self.job_repo.get_by_platform_external(data.platform, data.external_id)
         if existing:
@@ -50,7 +54,7 @@ class JobService(BaseService):
                 "job_already_exists",
                 extra={"user_id": user_id, "platform": data.platform, "external_id": data.external_id},
             )
-            return JobResponse.model_validate(existing, from_attributes=True)
+            return JobResponse.model_validate(existing, from_attributes=True), False
 
         job_data = data.model_dump(exclude_unset=True)
         job_data["user_id"] = user_id
@@ -61,7 +65,7 @@ class JobService(BaseService):
             extra={"user_id": user_id, "job_id": job.id, "platform": job.platform},
         )
 
-        return JobResponse.model_validate(job, from_attributes=True)
+        return JobResponse.model_validate(job, from_attributes=True), True
 
     async def get_by_id(self, user_id: int, job_id: int) -> JobResponse:
         """获取职位详情。"""
@@ -127,22 +131,26 @@ class JobService(BaseService):
         self.logger.info("job_deleted", extra={"user_id": user_id, "job_id": job_id})
 
     @transactional
-    async def create_hr(self, user_id: int, data: HRCreate) -> HRResponse:
-        """创建或更新 HR 信息。"""
+    async def create_hr(self, user_id: int, data: HRCreate) -> tuple[HRResponse, bool]:
+        """创建或更新 HR 信息。
+
+        Returns:
+            (HR 响应, 是否为新创建)。去重命中时第二个值为 False。
+        """
         existing = await self.hr_repo.get_by_external_id(data.platform, data.external_id, user_id)
         if existing:
             self.logger.info(
                 "hr_already_exists",
                 extra={"user_id": user_id, "platform": data.platform, "external_id": data.external_id},
             )
-            return HRResponse.model_validate(existing, from_attributes=True)
+            return HRResponse.model_validate(existing, from_attributes=True), False
 
         hr_data = data.model_dump(exclude_unset=True)
         hr_data["user_id"] = user_id
         hr = await self.hr_repo.create(hr_data)
 
         self.logger.info("hr_created", extra={"user_id": user_id, "hr_id": hr.id})
-        return HRResponse.model_validate(hr, from_attributes=True)
+        return HRResponse.model_validate(hr, from_attributes=True), True
 
     async def list_hr(self, user_id: int, page: int = 1, page_size: int = 50) -> PaginatedResponse[HRResponse]:
         """获取用户 HR 列表。"""

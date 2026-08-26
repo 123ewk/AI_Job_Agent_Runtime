@@ -9,9 +9,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.schema.common import BaseSchema
 
@@ -30,6 +30,12 @@ class SettingCategoryResponse(BaseSchema):
     settings: list[SettingItem] = Field(..., description="配置项列表")
 
 
+# 允许批量更新的分类白名单（与 CONFIG_DEFAULTS / Service 层对齐）
+_ALLOWED_BATCH_CATEGORIES: frozenset[str] = frozenset(
+    {"llm", "agent", "job_rule", "reply_style"}
+)
+
+
 class SettingBatchUpdate(BaseSchema):
     """批量更新配置请求。
 
@@ -38,6 +44,15 @@ class SettingBatchUpdate(BaseSchema):
 
     category: str = Field(..., description="配置分类")
     updates: list[SettingItem] = Field(..., description="待更新的配置项列表")
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, v: str) -> str:
+        """分类必须在白名单内，防止未知分类写入脏数据。"""
+        if v not in _ALLOWED_BATCH_CATEGORIES:
+            allowed = ", ".join(sorted(_ALLOWED_BATCH_CATEGORIES))
+            raise ValueError(f"不支持的配置分类: {v}（允许: {allowed}）")
+        return v
 
     @field_validator("updates")
     @classmethod
@@ -117,6 +132,17 @@ class JobRuleConfigUpdate(BaseSchema):
     outsourcing_allowed: bool = Field(False, description="是否接受外包")
     offsite_allowed: bool = Field(False, description="是否接受异地办公")
 
+    @model_validator(mode="after")
+    def validate_salary_range(self) -> "JobRuleConfigUpdate":
+        """最低薪资不得高于最高薪资（两者都设置时校验）。"""
+        if (
+            self.min_salary is not None
+            and self.max_salary is not None
+            and self.min_salary > self.max_salary
+        ):
+            raise ValueError("min_salary 不得大于 max_salary")
+        return self
+
 
 class JobRuleConfigResponse(BaseSchema):
     """求职规则配置响应。"""
@@ -136,9 +162,15 @@ class JobRuleConfigResponse(BaseSchema):
 class ReplyStyleConfigUpdate(BaseSchema):
     """回复风格配置更新请求。"""
 
-    tone: str = Field("professional", description="语气：professional / friendly / concise")
-    formality: str = Field("formal", description="正式程度：formal / neutral / casual")
-    length_preference: str = Field("medium", description="长度偏好：short / medium / long")
+    tone: Literal["professional", "friendly", "concise"] = Field(
+        "professional", description="语气"
+    )
+    formality: Literal["formal", "neutral", "casual"] = Field(
+        "formal", description="正式程度"
+    )
+    length_preference: Literal["short", "medium", "long"] = Field(
+        "medium", description="长度偏好"
+    )
     include_greeting: bool = Field(True, description="是否包含问候语")
     include_closing: bool = Field(True, description="是否包含结束语")
 
@@ -146,9 +178,9 @@ class ReplyStyleConfigUpdate(BaseSchema):
 class ReplyStyleConfigResponse(BaseSchema):
     """回复风格配置响应。"""
 
-    tone: str = Field(..., description="语气")
-    formality: str = Field(..., description="正式程度")
-    length_preference: str = Field(..., description="长度偏好")
+    tone: Literal["professional", "friendly", "concise"] = Field(..., description="语气")
+    formality: Literal["formal", "neutral", "casual"] = Field(..., description="正式程度")
+    length_preference: Literal["short", "medium", "long"] = Field(..., description="长度偏好")
     include_greeting: bool = Field(..., description="是否包含问候语")
     include_closing: bool = Field(..., description="是否包含结束语")
 

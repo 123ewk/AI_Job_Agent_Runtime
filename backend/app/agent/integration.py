@@ -51,15 +51,15 @@ class JobStoreAdapter:
         async with self._factory() as session:
             from app.service.job import JobService
 
-            created = await JobService(session).create(user_id, job)
-            job_id = int(created.id)
+            job_resp, _is_new = await JobService(session).create(user_id, job)
+            job_id = int(job_resp.id)
             if score_detail:
                 await JobService(session).update(
                     user_id,
                     job_id,
                     JobUpdate(score_detail=score_detail),
                 )
-            return created
+            return job_resp
 
 
 class ChatStoreAdapter:

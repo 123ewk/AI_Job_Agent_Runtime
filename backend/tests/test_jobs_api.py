@@ -39,13 +39,13 @@ class TestJobsAPI:
         assert data["status"] == "discovered"
 
     async def test_create_job_dedup(self, client: AsyncClient) -> None:
-        """同 platform + external_id 重复创建返回既有记录（幂等）。"""
+        """同 platform + external_id 重复创建返回既有记录（幂等：新建 201，命中 200）。"""
         first = await client.post(BASE, json=_job_payload("dup-1"))
         assert first.status_code == 201
         first_id = first.json()["id"]
 
         second = await client.post(BASE, json=_job_payload("dup-1"))
-        assert second.status_code == 201
+        assert second.status_code == 200
         assert second.json()["id"] == first_id
 
     async def test_list_jobs_empty(self, client: AsyncClient) -> None:

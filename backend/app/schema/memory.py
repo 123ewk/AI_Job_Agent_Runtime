@@ -12,7 +12,7 @@ class MemoryBase(BaseSchema):
     """记忆基础字段。"""
 
     type: MemoryType = Field(..., description="记忆类型")
-    content: str = Field(..., description="记忆内容")
+    content: str = Field(..., description="记忆内容", min_length=1)
 
 
 class MemoryCreate(MemoryBase):

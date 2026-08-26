@@ -125,8 +125,9 @@ class TestJobCreate:
         existing = _make_job(id=10, external_id="dup-1", title="已存在职位")
         service.job_repo.get_by_platform_external.return_value = existing
 
-        result = await service.create(user_id=1, data=JobCreate(external_id="dup-1"))
+        result, created = await service.create(user_id=1, data=JobCreate(external_id="dup-1"))
 
+        assert created is False
         assert result.id == 10
         assert result.title == "已存在职位"
         service.job_repo.get_by_platform_external.assert_awaited_once_with("boss", "dup-1")
@@ -138,8 +139,9 @@ class TestJobCreate:
         created = _make_job(id=11, external_id="new-1", user_id=7)
         service.job_repo.create.return_value = created
 
-        result = await service.create(user_id=7, data=JobCreate(external_id="new-1", title="Python 工程师"))
+        result, created = await service.create(user_id=7, data=JobCreate(external_id="new-1", title="Python 工程师"))
 
+        assert created is True
         assert result.id == 11
         assert result.user_id == 7
         service.job_repo.create.assert_awaited_once()
@@ -260,8 +262,9 @@ class TestHR:
         existing = _make_hr(id=3, external_id="hr-dup")
         service.hr_repo.get_by_external_id.return_value = existing
 
-        result = await service.create_hr(user_id=1, data=HRCreate(external_id="hr-dup"))
+        result, created = await service.create_hr(user_id=1, data=HRCreate(external_id="hr-dup"))
 
+        assert created is False
         assert result.id == 3
         service.hr_repo.get_by_external_id.assert_awaited_once_with("boss", "hr-dup", 1)
         service.hr_repo.create.assert_not_awaited()
@@ -272,8 +275,9 @@ class TestHR:
         created = _make_hr(id=4, user_id=1)
         service.hr_repo.create.return_value = created
 
-        result = await service.create_hr(user_id=1, data=HRCreate(external_id="hr-new", name="李主管"))
+        result, created = await service.create_hr(user_id=1, data=HRCreate(external_id="hr-new", name="李主管"))
 
+        assert created is True
         service.hr_repo.create.assert_awaited_once()
         call_data = service.hr_repo.create.await_args.args[0]
         assert call_data["user_id"] == 1

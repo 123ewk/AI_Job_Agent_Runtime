@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import ConversationServiceDep, CurrentUserDep
 from app.core.logging import get_logger
@@ -103,11 +103,11 @@ async def list_messages(
     user_id: CurrentUserDep,
     service: ConversationServiceDep,
     conversation_id: int,
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=500, description="消息数量上限"),
 ) -> list[MessageResponse]:
     """获取会话消息历史。
 
-    按发送时间正序排列。
+    按发送时间正序排列。limit 上限 500，防止全表扫描。
     """
     return await service.list_messages(user_id, conversation_id, limit=limit)
 

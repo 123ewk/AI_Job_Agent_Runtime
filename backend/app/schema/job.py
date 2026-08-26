@@ -21,8 +21,10 @@ from app.schema.enums import JobStatus
 class JobBase(BaseSchema):
     """职位基础字段（与 Job Model 列对齐）。"""
 
-    platform: str = Field("boss", description="平台标识", max_length=30)
-    external_id: str = Field(..., description="平台侧职位 ID（去重锚点）", max_length=100)
+    platform: str = Field("boss", description="平台标识", min_length=1, max_length=30)
+    external_id: str = Field(
+        ..., description="平台侧职位 ID（去重锚点）", min_length=1, max_length=100
+    )
     title: str | None = Field(None, description="职位名称", max_length=300)
     company: str | None = Field(None, description="公司名称", max_length=200)
     salary: str | None = Field(None, description="薪资范围", max_length=100)
@@ -82,8 +84,10 @@ class JobFilterParams(BaseSchema):
 class HRCreate(BaseSchema):
     """创建 HR 请求（与 HR Model 列对齐：external_id 去重锚点）。"""
 
-    platform: str = Field("boss", description="平台标识", max_length=30)
-    external_id: str = Field(..., description="平台侧 HR ID（去重锚点）", max_length=100)
+    platform: str = Field("boss", description="平台标识", min_length=1, max_length=30)
+    external_id: str = Field(
+        ..., description="平台侧 HR ID（去重锚点）", min_length=1, max_length=100
+    )
     name: str | None = Field(None, description="HR 姓名", max_length=100)
     company: str | None = Field(None, description="公司名称", max_length=200)
     position: str | None = Field(None, description="HR 职位", max_length=200)

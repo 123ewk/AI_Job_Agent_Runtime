@@ -13,8 +13,10 @@ from app.schema.common import BaseSchema
 class ConversationBase(BaseSchema):
     """会话基础字段。"""
 
-    platform: str = Field("boss", description="平台标识", max_length=30)
-    external_id: str = Field(..., description="平台侧会话 ID", max_length=100)
+    platform: str = Field("boss", description="平台标识", min_length=1, max_length=30)
+    external_id: str = Field(
+        ..., description="平台侧会话 ID（去重锚点）", min_length=1, max_length=100
+    )
     hr_name: str | None = Field(None, description="HR 姓名", max_length=100)
     job_title: str | None = Field(None, description="职位名称", max_length=200)
 
@@ -62,7 +64,7 @@ class MessageBase(BaseSchema):
 
     external_msg_id: str | None = Field(None, description="平台侧消息 ID（去重用）", max_length=100)
     role: str = Field(..., description="角色：user / hr / agent / system", max_length=20)
-    content: str = Field(..., description="消息内容")
+    content: str = Field(..., description="消息内容", min_length=1)
     source: str = Field("manual", description="来源：manual / agent / history", max_length=20)
     sent_at: datetime | None = Field(None, description="发送时间")
 
@@ -82,9 +84,13 @@ class MessageBase(BaseSchema):
 
 
 class MessageCreate(MessageBase):
-    """创建消息请求。"""
+    """创建消息请求。
 
-    conversation_id: int = Field(..., description="会话 ID")
+    conversation_id 为可选：路径参数已携带会话 ID，服务端会强制覆盖。
+    保留字段仅为兼容已有调用方，不做为真实输入来源。
+    """
+
+    conversation_id: int | None = Field(None, description="会话 ID（由路径参数覆盖）")
 
 
 class MessageResponse(MessageBase):

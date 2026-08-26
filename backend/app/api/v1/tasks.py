@@ -142,10 +142,14 @@ async def approve_task(
     task_id: int,
     data: TaskApproveRequest,
 ) -> StatusResponse:
-    """批准任务继续执行。
+    """对任务待处理审批做决策（批准或拒绝）。
 
-    人工确认后，任务从 waiting_approval 恢复到 running。
+    ``approved=True`` → 批准，任务从 waiting_approval 恢复执行；
+    ``approved=False`` → 拒绝，任务进入 canceled 终态（等价于调用 /deny）。
     决策结果会写入 approval 记录，作为后续 LLM 微调数据。
+
+    注：接口路径名 ``/approve`` 为历史遗留，实际支持双向决策，保持
+    与前端契约（``TaskApproveRequest.approved`` 字段）一致。
     """
     from app.repository.approval import ApprovalRepository
     from app.service.approval import ApprovalService
@@ -155,10 +159,13 @@ async def approve_task(
     if approval is None:
         raise NotFoundError("任务没有待处理的审批")
 
-    # 使用请求体 approval_id + 当前用户；approve 内部会校验归属与 pending 状态
+    # 使用请求体里的 approved 字段决定走批准或拒绝路径
     approval_service = ApprovalService(service.db)
-    await approval_service.approve(data.approval_id, user_id, data.user_note)
-    return StatusResponse(status="ok", message="已批准")
+    if data.approved:
+        await approval_service.approve(data.approval_id, user_id, data.user_note)
+        return StatusResponse(status="ok", message="已批准")
+    await approval_service.deny(data.approval_id, user_id, data.user_note)
+    return StatusResponse(status="ok", message="已拒绝")
 
 
 @router.post("/{task_id}/approvals/deny", response_model=StatusResponse)
