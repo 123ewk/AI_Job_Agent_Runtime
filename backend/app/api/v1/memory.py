@@ -142,8 +142,8 @@ async def extract_and_save_memory(
 
     LLM 分析会话历史，提取事实性信息和用户偏好，
     去重后写入记忆库。供任务完成后自动调用。
+
+    当前功能未实现（依赖 LLM 提取管线），调用即返回 501。
     """
-    # job_id 与 messages 由调用方（任务完成回调）传入；此入口暂以空值占位，
-    # service.extract_and_save 当前为 stub，始终返回 0。
     count = await service.extract_and_save(user_id, conversation_id, job_id=None, messages=[])
     return StatusResponse(status="ok", message=f"提取完成，新增 {count} 条记忆")

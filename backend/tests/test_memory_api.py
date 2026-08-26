@@ -1,8 +1,9 @@
 """记忆域 API 集成测试。
 
-覆盖记忆写入、语义检索、按上下文列出、删除、任务上下文注入、会话提取。
+覆盖记忆写入、检索、按上下文列出、删除、任务上下文注入、会话提取。
 字段契约：MemoryCreate 只需 type（MemoryType 枚举）+ content，无 importance；
-检索用 top_k（无 threshold）；embedding 为 stub 零向量，相似度可能为 NaN，故仅断言结构。
+检索用 top_k（无 threshold）。测试环境未配置向量模型，走关键词/精确/时间倒序
+降级路径（语义/零向量占位/降级细节见 test_memory_embedding.py）。
 """
 
 from __future__ import annotations
@@ -35,10 +36,13 @@ class TestMemoryAPI:
         assert resp.json() == []
 
     async def test_search_memory_with_data(self, client: AsyncClient) -> None:
-        """写入后检索返回列表（零向量 embedding，仅断言结构不断言相似度）。"""
+        """写入后检索返回列表。
+
+        未配置向量模型时走关键词 ILIKE 降级路径，用命中关键词断言结构。
+        """
         await client.post(BASE, json={"type": "preference", "content": "倾向远程工作"})
 
-        resp = await client.post(f"{BASE}/search", json={"query": "工作方式", "top_k": 5})
+        resp = await client.post(f"{BASE}/search", json={"query": "远程", "top_k": 5})
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, list)
@@ -82,12 +86,11 @@ class TestMemoryAPI:
         assert "levels" in data
 
     async def test_extract_memory(self, client: AsyncClient) -> None:
-        """POST /memory/extract?conversation_id= stub 返回 0 条。"""
+        """POST /memory/extract 功能未实现返回 501 not_implemented（消除静默假成功）。"""
         resp = await client.post(f"{BASE}/extract", params={"conversation_id": 99999})
-        assert resp.status_code == 200
+        assert resp.status_code == 501
         data = resp.json()
-        assert data["status"] == "ok"
-        assert "0" in data["message"]
+        assert data["error"] == "not_implemented"
 
     @pytest.mark.skip(reason="无 GET /memory（列表）路由，记忆按 conversation/job 上下文列出")
     async def test_list_memories(self, client: AsyncClient) -> None:

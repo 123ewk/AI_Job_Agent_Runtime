@@ -16,9 +16,10 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ForbiddenError, NotFoundError
+from app.core.exceptions import ForbiddenError, NotFoundError, NotImplementedError
+from app.infra.embedding import EMBEDDING_DIM, EmbeddingError, generate_embedding
 from app.models.memory import Memory as MemoryModel
-from app.repository.memory import MemoryRepository
+from app.repository.memory import ZERO_EMBEDDING, MemoryRepository
 from app.schema.memory import MemoryCreate, MemoryResponse, MemorySearchRequest
 from app.service.base import BaseService, transactional
 
@@ -73,9 +74,10 @@ class MemoryService(BaseService):
 
         自动生成 embedding 向量，去重检查（相似度过高则跳过）。
 
-        去重逻辑：
-        1. 对新内容生成 embedding
-        2. 检索用户记忆中与新内容相似度 > 0.95 的条目
+        去重逻辑（优雅降级）：
+        1. 生成 embedding 向量；未配置向量模型时返回 None
+        2a. 已配置：语义去重（相似度 > 0.95 视为重复，跳过写入）
+        2b. 未配置（降级）：精确内容去重 + 零向量占位落库
         3. 存在则跳过并返回现有记忆，否则写入新记忆
 
         Args:
@@ -85,28 +87,42 @@ class MemoryService(BaseService):
         Returns:
             新建或已存在的记忆响应
         """
-        # 生成 embedding 向量
-        embedding = await self._generate_embedding(data.content)
+        embedding = await self._generate_embedding(user_id, data.content)
 
-        # 去重检查：检索高相似度记忆
-        existing = await self.memory_repo.semantic_search(
-            user_id=user_id,
-            query_vector=embedding,
-            limit=1,
-            memory_type=data.type,
-        )
-
-        if existing:
-            memory, distance = existing[0]
-            similarity = 1.0 - distance
-            if similarity >= SIMILARITY_DUPLICATE_THRESHOLD:
+        if embedding is None:
+            # 降级：无向量可用，精确内容去重 + 零向量占位（满足 embedding NOT NULL）
+            existing = await self.memory_repo.find_by_content_exact(
+                user_id=user_id,
+                content=data.content,
+                memory_type=data.type,
+            )
+            if existing:
                 self.logger.debug(
-                    "memory_duplicate_skip",
+                    "memory_duplicate_exact_skip",
                     user_id=user_id,
-                    existing_id=memory.id,
-                    similarity=round(similarity, 4),
+                    existing_id=existing.id,
                 )
-                return self._to_response(memory, similarity_score=similarity)
+                return self._to_response(existing)
+            embedding = ZERO_EMBEDDING
+        else:
+            # 已配置向量模型：语义去重（检索高相似度记忆）
+            existing = await self.memory_repo.semantic_search(
+                user_id=user_id,
+                query_vector=embedding,
+                limit=1,
+                memory_type=data.type,
+            )
+            if existing:
+                memory, distance = existing[0]
+                similarity = 1.0 - distance
+                if similarity >= SIMILARITY_DUPLICATE_THRESHOLD:
+                    self.logger.debug(
+                        "memory_duplicate_skip",
+                        user_id=user_id,
+                        existing_id=memory.id,
+                        similarity=round(similarity, 4),
+                    )
+                    return self._to_response(memory, similarity_score=similarity)
 
         # 写入新记忆
         new_memory = await self.memory_repo.create(
@@ -134,20 +150,40 @@ class MemoryService(BaseService):
     async def search(self, user_id: int, request: MemorySearchRequest) -> list[MemoryResponse]:
         """语义检索相关记忆。
 
-        先向量化 query，然后 pgvector 余弦相似度 Top-K，
-        支持按 conversation_id / job_id / memory_type 过滤。
+        优雅降级：已配置向量模型 → pgvector 余弦相似度 Top-K；未配置 →
+        关键词 ILIKE 检索（按时间倒序）。
 
-        注意：返回的 similarity_score 是余弦相似度（0~1），值越大越相似。
-        pgvector 的 cosine_distance = 1 - cosine_similarity。
+        注意：语义路径返回的 similarity_score 是余弦相似度（0~1），值越大
+        越相似；pgvector 的 cosine_distance = 1 - cosine_similarity。
 
         Args:
             user_id: 检索用户范围
             request: 检索请求（query + 过滤条件）
 
         Returns:
-            按相似度排序的记忆列表
+            按相似度排序（语义）或时间倒序（降级）的记忆列表
         """
-        query_vector = await self._generate_embedding(request.query)
+        query_vector = await self._generate_embedding(user_id, request.query)
+
+        if query_vector is None:
+            # 降级：无向量可用，关键词 ILIKE 检索
+            results = await self.memory_repo.search_keyword(
+                user_id=user_id,
+                keyword=request.query,
+                limit=request.top_k,
+                conversation_id=request.conversation_id,
+                job_id=request.job_id,
+                memory_type=request.memory_type,
+            )
+            self.logger.debug(
+                "memory_keyword_search_completed",
+                user_id=user_id,
+                query_len=len(request.query),
+                result_count=len(results),
+                conversation_id=request.conversation_id,
+                job_id=request.job_id,
+            )
+            return [self._to_response(memory) for memory in results]
 
         results = await self.memory_repo.semantic_search(
             user_id=user_id,
@@ -190,6 +226,8 @@ class MemoryService(BaseService):
 
         去重规则：相同 fact（content 文本相同）保留最高权重版本。
 
+        优雅降级：未配置向量模型 → 按时间倒序取最近 top_k，按关联标注来源。
+
         Args:
             user_id: 用户 ID
             conversation_id: 关联会话 ID（可选）
@@ -199,7 +237,11 @@ class MemoryService(BaseService):
         Returns:
             加权排序后的上下文记忆列表
         """
-        query_vector = await self._generate_embedding("")  # TODO: 用任务摘要生成 query
+        query_vector = await self._generate_embedding(user_id, "")  # TODO: 用任务摘要生成 query
+
+        if query_vector is None:
+            # 降级：无向量可用，时间倒序最近记忆 + 来源标注
+            return await self._recent_context(user_id, conversation_id, job_id, top_k)
 
         # 并行检索三个上下文级别，减少 IO 等待
         results_conv, results_job, results_global = await self._search_three_tiers(
@@ -389,6 +431,41 @@ class MemoryService(BaseService):
 
         return result
 
+    async def _recent_context(
+        self,
+        user_id: int,
+        conversation_id: int | None,
+        job_id: int | None,
+        top_k: int,
+    ) -> list[dict[str, Any]]:
+        """降级路径：任务上下文检索。
+
+        未配置向量模型时无相似度可算，改按时间倒序取最近 top_k 条，
+        按关联标注来源（conversation > job > global），与 _rank_memories
+        输出结构一致（相似度/权重置 None 以示「无语义分数」）。
+        """
+        memories = await self.memory_repo.list_recent(user_id, limit=top_k)
+        result: list[dict[str, Any]] = []
+        for m in memories:
+            if conversation_id is not None and m.conversation_id == conversation_id:
+                source = "conversation"
+            elif job_id is not None and m.job_id == job_id:
+                source = "job"
+            else:
+                source = "global"
+            result.append(
+                {
+                    "id": m.id,
+                    "type": m.type,
+                    "content": m.content,
+                    "source": source,
+                    "raw_similarity": None,
+                    "weighted_similarity": None,
+                    "weight": None,
+                }
+            )
+        return result
+
     async def list_by_conversation(
         self, user_id: int, conversation_id: int, limit: int = 50
     ) -> list[MemoryResponse]:
@@ -465,13 +542,12 @@ class MemoryService(BaseService):
     ) -> int:
         """从任务执行记录中提取长期记忆并保存。
 
-        TODO: 调用 LLM 从对话历史中提取需要长期保留的事实：
-        - 用户偏好（薪资期望、地点、公司类型等）
-        - HR 约定（面试时间、流程等）
-        - 历史决策（已拒绝/接受的岗位）
-        - 其他长期有效的信息
+        需调用 LLM 从对话历史中提取需要长期保留的事实（用户偏好、
+        HR 约定、历史决策等）。
 
-        目前为占位实现，仅记录日志，不做实际提取。
+        Raises:
+            NotImplementedError: 提取依赖 LLM 记忆提取管线，当前未实现。
+                此前占位返回「新增 0 条」属静默假成功，改为明确抛错（501）。
 
         Args:
             user_id: 关联用户 ID
@@ -480,43 +556,75 @@ class MemoryService(BaseService):
             messages: 对话历史消息列表
 
         Returns:
-            新增记忆数量（当前始终返回 0）
+            新增记忆数量
         """
         self.logger.debug(
-            "memory_extract_stub",
+            "memory_extract_not_implemented",
             user_id=user_id,
             conversation_id=conversation_id,
             job_id=job_id,
             message_count=len(messages),
         )
-        # TODO: 实现 LLM 记忆提取逻辑
-        return 0
+        msg = "LLM 记忆提取功能尚未实现"
+        raise NotImplementedError(msg)
 
-    async def _generate_embedding(self, text: str) -> list[float]:
-        """生成文本 embedding 向量。
+    async def _generate_embedding(self, user_id: int, text: str) -> list[float] | None:
+        """生成文本 embedding 向量（512 维）；未配置向量模型时返回 None。
 
-        使用 bge-small-zh-v1.5 模型，512 维。
+        配置来源（方案 A）：优先读进程内活动配置注册表（扩展推送的明文 key）；
+        注册表为空回退 DB（过渡期不回归）。
 
-        TODO: 当前为占位实现，返回零向量。
-        未来集成 sentence-transformers 或 OpenAI/火山引擎 embedding API。
-
-        实现注意：
-        1. 文本长度截断（bge-small-zh 最大 512 tokens）
-        2. 批量生成时考虑速率限制
-        3. 结果需要 L2 归一化，保证 pgvector 余弦距离计算正确
+        降级触发条件（任一命中即返回 None，不抛异常，由调用方降级）：
+        - 未配置 api_key / model（记忆功能照常可用，仅无语义检索）
+        - 调用 embedding API 失败（网络 / HTTP 错误，容错外部服务不可用）
+        - 返回向量维度 != 512（与记忆库 Vector(512) 不一致，防脏向量入库）
 
         Args:
+            user_id: 关联用户（配置按用户隔离，读 DB 需要）
             text: 待向量化的文本
 
         Returns:
-            512 维浮点向量，L2 归一化
+            512 维浮点向量；不可用时 None
         """
-        # TODO: 替换为真实 embedding 调用
-        # 占位实现：返回 512 维零向量
-        # 注意：pgvector 需要 L2 归一化的向量才能正确计算余弦相似度
-        self.log_with_context(
-            logging.DEBUG,
-            "embedding_generation_stub",
-            text_len=len(text),
-        )
-        return [0.0] * 512
+        from app.core.active_config_registry import get_active_config
+        from app.service.setting import SettingsService
+
+        # 方案 A：优先读注册表；为空回退已存 DB 配置
+        current = get_active_config("embedding")
+        if not current.get("api_key"):
+            current = await SettingsService(self.db).get_embedding_runtime_config(user_id)
+
+        api_key = current.get("api_key")
+        model = current.get("model")
+        if not api_key or not model:
+            self.log_with_context(logging.DEBUG, "embedding_not_configured", user_id=user_id)
+            return None
+
+        try:
+            vector = await generate_embedding(
+                api_key=str(api_key),
+                base_url=current.get("base_url"),
+                model=str(model),
+                text=text,
+            )
+        except EmbeddingError as exc:
+            # 外部服务失败属预期容错：降级而非中断记忆写入/检索
+            self.log_with_context(
+                logging.WARNING,
+                "embedding_generation_failed",
+                user_id=user_id,
+                error=str(exc),
+            )
+            return None
+
+        if len(vector) != EMBEDDING_DIM:
+            self.log_with_context(
+                logging.WARNING,
+                "embedding_dimension_mismatch",
+                user_id=user_id,
+                expected=EMBEDDING_DIM,
+                actual=len(vector),
+            )
+            return None
+
+        return vector
