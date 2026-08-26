@@ -113,6 +113,104 @@ class TestTasksAPI:
         resp = await client.post(f"{BASE}/{task_id}/retry")
         assert resp.status_code >= 400
 
+    async def test_retry_enqueues_new_task(
+        self,
+        client: AsyncClient,
+        test_session_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """重试失败任务会建 pending 新任务并入队 Redis Stream（P0 回归）。
+
+        此前 retry() 只落库不入队（task.py:317 TODO），消费循环永不消费、任务永久 pending。
+        mock 掉 enqueue 断言被调用且参数正确（对齐 create() 的队列构造）。
+        """
+        import app.service.task as task_mod
+        from app.models.task import Task
+
+        tid = uuid4()
+        # 造一条 failed 可重试任务（retry_count=0 < max_retries=2）
+        async with test_session_factory() as session:
+            task = Task(
+                user_id=1,
+                type="user_initiated",
+                status="failed",
+                thread_id=tid,
+                priority="P2",
+                payload={"goal": "重试我"},
+                retry_count=0,
+                max_retries=2,
+            )
+            session.add(task)
+            await session.commit()
+
+        queued: list[object] = []
+
+        class FakeQueue:
+            async def enqueue(self, message: object) -> None:
+                queued.append(message)
+
+        def fake_get_classes() -> tuple[type, type]:
+            from app.infra.queue import QueueMessage  # 真实构造，校验字段契约
+
+            return FakeQueue, QueueMessage
+
+        monkeypatch.setattr(task_mod, "_get_queue_classes", fake_get_classes)
+
+        resp = await client.post(f"{BASE}/{task.id}/retry")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["status"] == "pending"
+        assert data["retry_count"] == 1
+
+        # 断言恰好入队一次、参数正确
+        assert len(queued) == 1
+        msg = queued[0]
+        assert str(msg.task_id) == str(data["id"])
+        assert str(msg.thread_id) == str(tid)  # 复用原 thread_id 作 Checkpoint 锚点
+        assert msg.priority == "P2"
+        assert msg.conversation_id is None
+        assert msg.payload == {"goal": "重试我"}
+
+    async def test_retry_enqueue_failure_propagates(
+        self,
+        client: AsyncClient,
+        test_session_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """入队失败必须向上抛（不吞掉），避免任务落库却无人消费的静默失效。"""
+        import app.service.task as task_mod
+        from app.models.task import Task
+
+        async with test_session_factory() as session:
+            task = Task(
+                user_id=1,
+                type="user_initiated",
+                status="failed",
+                thread_id=uuid4(),
+                priority="P1",
+                payload={},
+                retry_count=0,
+                max_retries=2,
+            )
+            session.add(task)
+            await session.commit()
+
+        class Boom:
+            async def enqueue(self, _message: object) -> None:
+                redis_down = "redis down"
+                raise RuntimeError(redis_down)
+
+        def fake_get_classes() -> tuple[type, type]:
+            from app.infra.queue import QueueMessage
+
+            return Boom, QueueMessage
+
+        monkeypatch.setattr(task_mod, "_get_queue_classes", fake_get_classes)
+
+        # 无 try/except 包裹 → 异常穿透 → 接口层 500（>=400 而非静默 200）
+        resp = await client.post(f"{BASE}/{task.id}/retry")
+        assert resp.status_code >= 500
+
     async def test_queue_stats(self, client: AsyncClient) -> None:
         """GET /tasks/queue/stats 返回 pending 计数与并发上限。"""
         await _create_task(client)

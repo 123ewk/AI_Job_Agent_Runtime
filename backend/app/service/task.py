@@ -314,7 +314,23 @@ class TaskService(BaseService):
             max_retries=retried_task.max_retries,
         )
 
-        # TODO: 入队 Redis Stream
+        # ---------------- 入队 Redis Stream
+        # 对齐 create() 第 160-172 行：落库后必须入队，否则消费循环永不消费，任务永久 pending。
+        # 复用原 thread_id 作为队列锚点，与 DB 记录一致。
+        # 注：局部变量用小写（create() 的 CamelCase 属既有 lint 债务，增量不新增）。
+        queue_client, queue_message = _get_queue_classes()
+        queue = queue_client()
+        message = queue_message(
+            task_id=str(retried_task.id),
+            task_type=original_task.type,
+            thread_id=original_task.thread_id or uuid4(),
+            # 队列消息的 task_id/conversation_id 统一为「DB int 主键序列化串」，
+            # 避免消费端 UUID() 解析 int PK（"123"）时 ValueError。
+            conversation_id=str(original_task.conversation_id) if original_task.conversation_id else None,
+            priority=priority.value,
+            payload=original_task.payload or {},
+        )
+        await queue.enqueue(message)
 
         return self._to_response(retried_task)
 
