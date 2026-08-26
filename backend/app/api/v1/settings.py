@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter
 
 from app.api.deps import CurrentUserDep, SettingsServiceDep
@@ -136,10 +138,24 @@ async def batch_update_settings(
 async def validate_llm_settings(
     user_id: CurrentUserDep,
     service: SettingsServiceDep,
-) -> dict:
+    data: LLMConfigUpdate | None = None,
+) -> dict[str, Any]:
     """验证 LLM 配置连通性。
 
-    发送测试请求到 LLM Provider，验证配置是否有效。
+    优先用请求体里前端表单**当前填写**的 api_key（未落库也能测）；
+    请求体未携带 api_key 时，回退读取已保存配置再探测。判定不依赖「先保存」。
     """
-    ok, detail = await service.validate_llm_settings(user_id)
+    if data is not None and data.api_key:
+        ok, detail = await service.test_llm_connectivity(
+            api_key=data.api_key,
+            base_url=data.base_url,
+            provider=data.provider,
+        )
+    else:
+        current = await service.get_llm_runtime_config(user_id)
+        ok, detail = await service.test_llm_connectivity(
+            api_key=current.get("api_key"),
+            base_url=current.get("base_url"),
+            provider=current.get("provider"),
+        )
     return {"ok": ok, "detail": detail}

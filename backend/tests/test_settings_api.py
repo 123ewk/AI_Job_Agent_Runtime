@@ -10,9 +10,51 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+
+class _StubLLMResponse:
+    """探测响应桩。"""
+
+    def __init__(self, status: int) -> None:
+        self.status_code = status
+
+
+class _StubLLMClient:
+    """httpx.AsyncClient 探测桩：校验注入的 Authorization，返回固定状态码。
+
+    expected_auth 为 None 时跳过校验（供失败场景用）。
+    """
+
+    def __init__(self, expected_auth: str | None, status: int) -> None:
+        self._expected_auth = expected_auth
+        self._status = status
+
+    async def __aenter__(self) -> _StubLLMClient:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def get(self, _url: str, headers: dict[str, str] | None = None) -> _StubLLMResponse:
+        # 断言探测请求确实带上了调用方注入的 Bearer key（覆盖"用对了 key"）
+        if self._expected_auth is not None:
+            assert headers is not None and headers["Authorization"] == f"Bearer {self._expected_auth}"
+        return _StubLLMResponse(self._status)
+
+
+def _stub_httpx_connectivity(
+    monkeypatch: pytest.MonkeyPatch, expected_auth: str | None, status: int
+) -> None:
+    """把 settings 服务里的 httpx.AsyncClient 换成探测桩。"""
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda *_args, **_kwargs: _StubLLMClient(expected_auth, status),
+    )
 
 
 class TestSettingsAPI:
@@ -168,13 +210,56 @@ class TestSettingsAPI:
         data = resp.json()
         assert data["enabled"] is True
 
-    async def test_validate_llm_settings(self, client: AsyncClient) -> None:
-        """LLM 配置连通性校验（占位实现，未配置 api_key 时返回 ok=False）。"""
+    async def test_validate_llm_unfilled(self, client: AsyncClient) -> None:
+        """请求体空 + 未保存过 api_key → ok=False，detail 提示未填写。
+
+        验证修复后的判定规则：不看数据库、无 DB 依赖时如实报"未填写"。
+        """
         resp = await client.post(f"{self.BASE_URL}/validate-llm")
         assert resp.status_code == 200
         data = resp.json()
-        assert "ok" in data
-        assert "detail" in data
+        assert data["ok"] is False
+        assert "API Key" in data["detail"]
+
+    async def test_validate_llm_uses_form_body(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """表单刚填 api_key、未落库 → 用请求体里的 key 探测（核心修复场景）。
+
+        断言请求头真正带上了表单传入的 key，且 base_url 为空时按 provider 兜底。
+        """
+        _stub_httpx_connectivity(monkeypatch, "sk-form-never-saved", 200)
+        resp = await client.post(
+            f"{self.BASE_URL}/validate-llm",
+            json={
+                "provider": "openai",
+                "base_url": None,
+                "model": "gpt-4o-mini",
+                "api_key": "sk-form-never-saved",
+                "temperature": 0.7,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+
+    async def test_validate_llm_http_error(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """provider 返回 401（key 无效）→ ok=False，detail 带状态码。"""
+        _stub_httpx_connectivity(monkeypatch, "sk-bad-key", 401)
+        resp = await client.post(
+            f"{self.BASE_URL}/validate-llm",
+            json={
+                "provider": "openai",
+                "base_url": None,
+                "model": "gpt-4o-mini",
+                "api_key": "sk-bad-key",
+                "temperature": 0.7,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is False
+        assert "401" in resp.json()["detail"]
 
     async def test_api_key_stored_encrypted(
         self,
@@ -221,18 +306,29 @@ class TestSettingsAPI:
         assert masked is not None
         assert plain_key not in masked
 
-    async def test_api_key_validate_after_encrypt(self, client: AsyncClient) -> None:
-        """加密后 validate 能识别已配置 api_key（解密存在性检查正常）。"""
+    async def test_api_key_validate_after_encrypt(
+        self,
+        client: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """请求体为空 → 回退读取解密已保存 key 做探测（加解密 → 回退链路回归）。
+
+        探测桩断言 Authorization 用的是解密后的明文 key，既验证了回退读库、
+        也验证了 B5 加密存储后的正确解密。
+        """
+        plain_key = "sk-validate-after-encrypt"
         await client.put(
             f"{self.BASE_URL}/llm",
             json={
                 "provider": "openai",
                 "base_url": None,
                 "model": "gpt-4o-mini",
-                "api_key": "sk-validate-after-encrypt",
+                "api_key": plain_key,
                 "temperature": 0.7,
             },
         )
+        _stub_httpx_connectivity(monkeypatch, plain_key, 200)
         resp = await client.post(f"{self.BASE_URL}/validate-llm")
         assert resp.status_code == 200
-        assert resp.json()["ok"] is True  # 已配置 → 占位实现返回 True
+        assert resp.json()["ok"] is True
+        assert resp.json()["detail"] is None

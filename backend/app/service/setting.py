@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -86,6 +87,17 @@ def _get_value_with_default(current: dict[str, Any], key: str, category: str) ->
     if key in current:
         return current[key]
     return CONFIG_DEFAULTS[category][key]
+
+
+# 服务商 → 默认 API Base URL 映射。前端表单未填 base_url 时兜底用；
+# 优先对齐 openai 兼容协议（/v1/models 探测），anthropic 为自有协议无法走该探测。
+_PROVIDER_BASE_URLS: dict[str, str] = {
+    "openai": "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com/v1",
+    "doubao": "https://ark.cn-beijing.volces.com/api/v3",
+    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "deepseek": "https://api.deepseek.com/v1",
+}
 
 
 class SettingsService(BaseService):
@@ -381,25 +393,55 @@ class SettingsService(BaseService):
         """
         return await self._get_category_as_dict(user_id, "llm")
 
-    async def validate_llm_settings(self, user_id: int) -> tuple[bool, str | None]:
-        """校验 LLM 配置是否可用。
+    async def test_llm_connectivity(
+        self,
+        api_key: str | None,
+        base_url: str | None,
+        provider: str | None = None,
+    ) -> tuple[bool, str | None]:
+        """LLM 连通性探测。
 
-        实际调用 LLM API 做 connectivity check，返回可用性与错误信息。
-        用于用户保存配置时即时反馈。
+        **判定规则（重点）**：校验**显式传入**的 api_key —— 即前端表单里
+        **当前填写**的值，而非数据库里已保存的值。这样用户刚填 api_key、
+        尚未点保存也能立即「测试连接」，不依赖落库。api_key 为空才判
+        「未配置」。
+
+        base_url 为空时按 provider 兜底到默认地址（PROVIDER_BASE_URLS）。
+        探测实现：对 ``{base_url}/models`` 发 GET（Authorization: Bearer），
+        属 OpenAI 兼容协议；anthropic 是自有协议（/v1/messages）无法走该
+        探测，会如实返回失败原因，不伪装成功。8s 超时防 UI 卡死。
+
+        Args:
+            api_key: 待探测的 API Key（来自表单或已保存配置的解密值）
+            base_url: API Base URL，为空则按 provider 兜底
+            provider: 服务商，用于兜底 base_url
+
+        Returns:
+            (连通?, 可读信息)。ok=True 时 detail=None。
         """
-        current = await self._get_category_as_dict(user_id, "llm")
-        api_key = current.get("api_key")
-
         if not api_key:
-            return False, "API Key 未配置"
+            return False, "API Key 未配置（请先在表单填写 API Key）"
 
-        # TODO: 实际调用 LLM client 做 ping 测试
-        # try:
-        #     client = AsyncOpenAI(api_key=api_key, base_url=current.get("base_url"))
-        #     await client.models.list()
-        #     return True, None
-        # except Exception as exc:
-        #     return False, str(exc)
+        # _PROVIDER_BASE_URLS 是模块级常量，方法体可直接引用（非类属性，无作用域坑）
+        resolved_base_url = base_url or _PROVIDER_BASE_URLS.get(provider or "")
+        if not resolved_base_url:
+            return False, "缺少 API Base URL（请填写或选择服务商）"
 
-        self.logger.info("llm_validation_skipped", extra={"user_id": user_id})
-        return True, "配置已保存，连通性测试待实现"
+        probe_url = f"{resolved_base_url.rstrip('/')}/models"
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.get(
+                    probe_url,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+        except httpx.HTTPError as exc:
+            self.logger.info("llm_connectivity_failed", extra={"probe_url": probe_url, "error": str(exc)})
+            return False, f"连接失败：{exc}"
+
+        if resp.status_code == 200:
+            return True, None
+        self.logger.info(
+            "llm_connectivity_http_error",
+            extra={"probe_url": probe_url, "status": resp.status_code},
+        )
+        return False, f"连接失败：HTTP {resp.status_code}"

@@ -108,9 +108,21 @@ export const useSettingsStore = defineStore("settings", () => {
     else replyStyle.value = updated as ReplyStyleConfig
   }
 
-  /** LLM 连通性测试（POST /settings/validate-llm），后端当前为占位实现 */
-  async function validateLlm(): Promise<{ ok: boolean; detail: string }> {
-    return apiPost<{ ok: boolean; detail: string }>("/settings/validate-llm", {})
+  /**
+   * LLM 连通性测试（POST /settings/validate-llm）。
+   * 传入表单当前填写的值，后端据此探测（未落库也能测）；不传则回退已保存配置。
+   */
+  async function validateLlm(payload?: {
+    provider: string
+    base_url: string | null
+    model: string
+    api_key: string
+    temperature: number
+  }): Promise<{ ok: boolean; detail: string }> {
+    return apiPost<{ ok: boolean; detail: string }>(
+      "/settings/validate-llm",
+      payload ?? {},
+    )
   }
 
   return { llm, agent, jobRule, replyStyle, loading, error, loadAll, saveGroup, validateLlm }

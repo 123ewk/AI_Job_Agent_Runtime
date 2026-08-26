@@ -84,10 +84,22 @@ async function handleSave(): Promise<void> {
 }
 
 async function handleValidate(): Promise<void> {
+  // 先本地校验：后端判定依赖表单当前填写的 api_key（不读已保存值），
+  // 为空直接提示，不发请求、不要求先保存。
+  if (!form.value.api_key.trim()) {
+    ui.pushToast("error", "请先填写 API Key 再测试连接")
+    return
+  }
   validating.value = true
   validateResult.value = null
   try {
-    const res = await store.validateLlm()
+    const res = await store.validateLlm({
+      provider: form.value.provider,
+      base_url: form.value.base_url || null,
+      model: form.value.model,
+      api_key: form.value.api_key,
+      temperature: form.value.temperature,
+    })
     validateResult.value = res.ok ? "连接正常" : `连接失败：${res.detail}`
     ui.pushToast(res.ok ? "success" : "error", validateResult.value)
   } catch (e) {
