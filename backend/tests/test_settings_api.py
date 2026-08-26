@@ -14,6 +14,12 @@ import httpx
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.requests import Request
+
+from app.api.v1.settings import push_active_config
+from app.core.active_config_registry import get_active_config, set_active_config
+from app.core.exceptions import BadRequestError
+from app.schema.setting import ActiveConfigPush
 
 
 class _StubLLMResponse:
@@ -332,3 +338,94 @@ class TestSettingsAPI:
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
         assert resp.json()["detail"] is None
+
+
+class TestActiveConfigPushAPI:
+    """活动配置推送端点测试（方案 A /settings/active，本机限定）。"""
+
+    BASE_URL = "/api/v1/settings"
+
+    def _clear_registry(self) -> None:
+        set_active_config("llm", {})
+        set_active_config("job_rule", {})
+        set_active_config("reply_style", {})
+
+    async def test_push_active_writes_registry(self, client: AsyncClient) -> None:
+        """本机推送 llm（含明文 api_key）→ 落注册表，响应不回吐 key。"""
+        self._clear_registry()
+        resp = await client.post(
+            f"{self.BASE_URL}/active",
+            json={
+                "llm": {
+                    "provider": "openai",
+                    "base_url": None,
+                    "model": "gpt-4o-mini",
+                    "api_key": "sk-local-plaintext",
+                    "temperature": 0.7,
+                }
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+        llm = get_active_config("llm")
+        assert llm["api_key"] == "sk-local-plaintext"
+        assert llm["model"] == "gpt-4o-mini"
+        # 响应体绝不含明文 key
+        assert "sk-local-plaintext" not in resp.text
+
+    async def test_push_active_multiple_sections(self, client: AsyncClient) -> None:
+        """一次推送 llm + job_rule 两段，两段都写入注册表。"""
+        self._clear_registry()
+        resp = await client.post(
+            f"{self.BASE_URL}/active",
+            json={
+                "llm": {
+                    "provider": "deepseek",
+                    "base_url": None,
+                    "model": "deepseek-chat",
+                    "api_key": "sk-sections",
+                    "temperature": 0.7,
+                },
+                "job_rule": {
+                    "min_salary": 20,
+                    "max_salary": 50,
+                    "overtime_allowed": False,
+                    "outsourcing_allowed": False,
+                    "offsite_allowed": False,
+                },
+            },
+        )
+        assert resp.status_code == 200
+        assert get_active_config("llm")["api_key"] == "sk-sections"
+        job_rule = get_active_config("job_rule")
+        assert job_rule["min_salary"] == 20
+        assert job_rule["max_salary"] == 50
+
+    async def test_push_non_local_rejected(self) -> None:
+        """非本机来源直接拒绝（伪造 scope 直调路由函数断言抛 BadRequestError）。"""
+        self._clear_registry()
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": f"{self.BASE_URL}/active",
+            "headers": [],
+            "client": ("198.51.100.7", 55555),
+            "query_string": b"",
+            "server": ("testserver", 80),
+            "scheme": "http",
+            "root_path": "",
+        }
+        req = Request(scope)
+        body = ActiveConfigPush(
+            llm={
+                "provider": "openai",
+                "base_url": None,
+                "model": "gpt-4o-mini",
+                "api_key": "should-not-be-stored",
+                "temperature": 0.7,
+            }
+        )
+        with pytest.raises(BadRequestError):
+            await push_active_config(req, body)
+        # 拒绝后注册表应为空（llm 是本类的唯一预先填充段）
+        assert get_active_config("llm") == {}

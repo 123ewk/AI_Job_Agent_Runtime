@@ -151,3 +151,21 @@ class ReplyStyleConfigResponse(BaseSchema):
     length_preference: str = Field(..., description="长度偏好")
     include_greeting: bool = Field(..., description="是否包含问候语")
     include_closing: bool = Field(..., description="是否包含结束语")
+
+
+# -----------------------------------------------------------------------------
+# 活动配置推送（方案 A：扩展 local-first → 后端进程内注册表）
+# -----------------------------------------------------------------------------
+
+class ActiveConfigPush(BaseSchema):
+    """活动配置推送体（POST /settings/active，仅限本机）。
+
+    扩展在设置变更 / 建 WS 连接时，把当前活动的 LLM / 求职规则 / 回复风格
+    推给后端注册表，供 Agent 运行时读取（不再查 DB 设置）。
+    注意：llm.api_key 为**明文**，只落注册表内存；后端绝无 GET/读回接口
+    能将其吐出，也绝不写回任何持久化。
+    """
+
+    llm: LLMConfigUpdate | None = Field(None, description="活动 LLM 配置")
+    job_rule: JobRuleConfigUpdate | None = Field(None, description="活动求职规则")
+    reply_style: ReplyStyleConfigUpdate | None = Field(None, description="活动回复风格")

@@ -8,11 +8,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from app.api.deps import CurrentUserDep, SettingsServiceDep
+from app.core.active_config_registry import set_active_config
+from app.core.exceptions import BadRequestError
 from app.core.logging import get_logger
 from app.schema.setting import (
+    ActiveConfigPush,
     AgentConfigResponse,
     AgentConfigUpdate,
     JobRuleConfigResponse,
@@ -27,6 +30,35 @@ from app.schema.setting import (
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 logger = get_logger("app.api.settings")
+
+# 允许推送活动配置的本机回环地址（方案 A 防泄漏：只收本机明文 api_key）
+_LOCAL_HOSTS = frozenset({"127.0.0.1", "::1"})
+
+
+@router.post("/active")
+async def push_active_config(request: Request, data: ActiveConfigPush) -> dict:
+    """本机限定：接收扩展推送的活动配置，落进程内注册表。
+
+    扩展在设置变更 / 建 WS 连接时调用。接受 llm / job_rule / reply_style
+    三段（各段可选），明文 api_key 只进内存注册表，响应不回吐任何 key。
+    非本机来源直接拒绝（BadRequestError），防局域网任意机器塞配置。
+    """
+    host = request.client.host if request.client else ""
+    if host not in _LOCAL_HOSTS:
+        msg = "仅允许本机推送活动配置"
+        raise BadRequestError(msg)
+
+    if data.llm is not None:
+        set_active_config("llm", data.llm.model_dump())
+    if data.job_rule is not None:
+        set_active_config("job_rule", data.job_rule.model_dump())
+    if data.reply_style is not None:
+        set_active_config("reply_style", data.reply_style.model_dump())
+
+    logger.info("active_config_pushed", extra={"sections": len(
+        [x for x in (data.llm, data.job_rule, data.reply_style) if x is not None]
+    )})
+    return {"status": "ok"}
 
 
 @router.get("", response_model=list[SettingCategoryResponse])
