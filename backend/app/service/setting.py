@@ -407,9 +407,12 @@ class SettingsService(BaseService):
         「未配置」。
 
         base_url 为空时按 provider 兜底到默认地址（PROVIDER_BASE_URLS）。
-        探测实现：对 ``{base_url}/models`` 发 GET（Authorization: Bearer），
-        属 OpenAI 兼容协议；anthropic 是自有协议（/v1/messages）无法走该
-        探测，会如实返回失败原因，不伪装成功。8s 超时防 UI 卡死。
+
+        **双协议兼容**：OpenAI 兼容协议打 ``{base}/models``（Authorization:
+        Bearer）；anthropic 兼容协议（provider=anthropic，或 base_url 含
+        ``/anthropic`` 路径，如 DeepSeek 的 anthropic 兼容端点）打
+        ``{base}/v1/models``（或 base 已含 /v1 时打 ``{base}/models``），
+        用 ``x-api-key`` + ``anthropic-version`` 头。8s 超时防 UI 卡死。
 
         Args:
             api_key: 待探测的 API Key（来自表单或已保存配置的解密值）
@@ -427,13 +430,21 @@ class SettingsService(BaseService):
         if not resolved_base_url:
             return False, "缺少 API Base URL（请填写或选择服务商）"
 
-        probe_url = f"{resolved_base_url.rstrip('/')}/models"
+        base = resolved_base_url.rstrip("/")
+        # anthropic 协议判定：显式 provider，或 base_url 带 /anthropic 路径标记
+        # （如 DeepSeek 的 https://api.deepseek.com/anthropic 兼容端点）
+        anthropic = (provider or "").lower() == "anthropic" or "/anthropic" in base.lower()
+
+        if anthropic:
+            probe_url = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+            headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+        else:
+            probe_url = f"{base}/models"
+            headers = {"Authorization": f"Bearer {api_key}"}
+
         try:
             async with httpx.AsyncClient(timeout=8) as client:
-                resp = await client.get(
-                    probe_url,
-                    headers={"Authorization": f"Bearer {api_key}"},
-                )
+                resp = await client.get(probe_url, headers=headers)
         except httpx.HTTPError as exc:
             self.logger.info("llm_connectivity_failed", extra={"probe_url": probe_url, "error": str(exc)})
             return False, f"连接失败：{exc}"

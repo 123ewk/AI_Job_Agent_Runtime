@@ -30,14 +30,25 @@ class _StubLLMResponse:
 
 
 class _StubLLMClient:
-    """httpx.AsyncClient 探测桩：校验注入的 Authorization，返回固定状态码。
+    """httpx.AsyncClient 探测桩：校验注入的认证头 + 探测 URL 协议，返回固定状态码。
 
-    expected_auth 为 None 时跳过校验（供失败场景用）。
+    - header="Authorization" → 断言 Bearer <expected_secret>（OpenAI 兼容协议）
+    - header="x-api-key"     → 断言 x-api-key <expected_secret>（anthropic 兼容协议）
+    - url_suffix 断言探测路径确实按协议拼对（如 /models vs /v1/models）
+    expected_secret 为 None 时跳过头校验（供失败场景用）。
     """
 
-    def __init__(self, expected_auth: str | None, status: int) -> None:
-        self._expected_auth = expected_auth
+    def __init__(
+        self,
+        expected_secret: str | None,
+        status: int,
+        header: str,
+        url_suffix: str,
+    ) -> None:
+        self._expected_secret = expected_secret
         self._status = status
+        self._header = header
+        self._url_suffix = url_suffix
 
     async def __aenter__(self) -> _StubLLMClient:
         return self
@@ -45,22 +56,32 @@ class _StubLLMClient:
     async def __aexit__(self, *exc: object) -> bool:
         return False
 
-    async def get(self, _url: str, headers: dict[str, str] | None = None) -> _StubLLMResponse:
-        # 断言探测请求确实带上了调用方注入的 Bearer key（覆盖"用对了 key"）
-        if self._expected_auth is not None:
-            assert headers is not None and headers["Authorization"] == f"Bearer {self._expected_auth}"
+    async def get(self, url: str, headers: dict[str, str] | None = None) -> _StubLLMResponse:
+        # 断言探测请求打对了协议端点（覆盖"用对了路径"）
+        assert url.endswith(self._url_suffix), f"unexpected probe url: {url}"
+        if self._expected_secret is not None:
+            assert headers is not None
+            if self._header == "x-api-key":
+                assert headers.get("x-api-key") == self._expected_secret
+            else:
+                assert headers["Authorization"] == f"Bearer {self._expected_secret}"
         return _StubLLMResponse(self._status)
 
 
 def _stub_httpx_connectivity(
-    monkeypatch: pytest.MonkeyPatch, expected_auth: str | None, status: int
+    monkeypatch: pytest.MonkeyPatch,
+    expected_auth: str | None,
+    status: int,
+    *,
+    header: str = "Authorization",
+    url_suffix: str = "/models",
 ) -> None:
     """把 settings 服务里的 httpx.AsyncClient 换成探测桩。"""
-    monkeypatch.setattr(
-        httpx,
-        "AsyncClient",
-        lambda *_args, **_kwargs: _StubLLMClient(expected_auth, status),
-    )
+
+    def factory(*_args: object, **_kwargs: object) -> _StubLLMClient:
+        return _StubLLMClient(expected_auth, status, header, url_suffix)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
 
 
 class TestSettingsAPI:
@@ -266,6 +287,58 @@ class TestSettingsAPI:
         assert resp.status_code == 200
         assert resp.json()["ok"] is False
         assert "401" in resp.json()["detail"]
+
+    async def test_validate_llm_anthropic_v1(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """provider=anthropic 且 base 含 /v1 → 用 x-api-key 打 /v1/models（非 Bearer+/models）。"""
+        _stub_httpx_connectivity(
+            monkeypatch,
+            "sk-anthropic",
+            200,
+            header="x-api-key",
+            url_suffix="/v1/models",
+        )
+        resp = await client.post(
+            f"{self.BASE_URL}/validate-llm",
+            json={
+                "provider": "anthropic",
+                "base_url": "https://api.anthropic.com/v1",
+                "model": "claude-3-sonnet",
+                "api_key": "sk-anthropic",
+                "temperature": 0.7,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+
+    async def test_validate_llm_anthropic_compat_deepseek(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """DeepSeek anthropic 兼容端点（base 含 /anthropic 标记）→ x-api-key + /anthropic/v1/models。
+
+        回归修复：旧逻辑对 anthropic 端点硬拼 /models 得 404 误报「连接失败」。
+        """
+        _stub_httpx_connectivity(
+            monkeypatch,
+            "sk-deepseek-ac",
+            200,
+            header="x-api-key",
+            url_suffix="/anthropic/v1/models",
+        )
+        resp = await client.post(
+            f"{self.BASE_URL}/validate-llm",
+            json={
+                "provider": "deepseek",
+                "base_url": "https://api.deepseek.com/anthropic",
+                "model": "deepseek-chat",
+                "api_key": "sk-deepseek-ac",
+                "temperature": 0.7,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        assert resp.json()["detail"] is None
 
     async def test_api_key_stored_encrypted(
         self,
