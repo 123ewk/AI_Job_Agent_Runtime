@@ -45,9 +45,10 @@
   2. **删除留档**：删这两个空壳 + 在 doc 里注明"规则当前内联在 router/skill，未来属 domain"。
   **推荐先 2 后评估**，避免为凑架构而重排已经跑通的红线。
 
-### B2. 死壳（被别处取代 / backlog，可安全清或留待功能落地）
-- **`app/agent/runtime/events.py`**：旧 WS 占位，已被 `ws_hub.py` 完全取代 → 应删。
-- **`app/agent/runtime/approval_manager.py`**：审批创建/状态机实际在 `WorkflowEngine` + `ApprovalService` → 应删（或并入)。
+### B2. 死壳（被别处取代 / backlog，可安全清或留待功能落地） [x] ✅ events/approval_manager 已删（2026-08-26）
+- **`app/agent/runtime/events.py`**：旧 WS 占位，已被 `ws_hub.py` 完全取代 → 应删。**✅ 已删**（纯 4 行 docstring 空壳，全库无 import，git rm）。
+- **`app/agent/runtime/approval_manager.py`**：审批创建/状态机实际在 `WorkflowEngine` + `ApprovalService` → 应删（或并入)。**✅ 已删**。
+  （`memory_store.py` / `scheduler.py` / `recovery/browser_recovery.py` 属 backlog 未实现，按文档保留清出本期范围。）
 - **`app/agent/runtime/memory_store.py`**：pgvector 长期记忆，未实现（backlog）。
 - **`app/agent/runtime/scheduler.py`**：APScheduler 周期寻岗，未实现（backlog）。
 - **`app/agent/recovery/browser_recovery.py`**：`WorkflowEngine.recover_browser` 的 `_recover_fn` 未接线，
