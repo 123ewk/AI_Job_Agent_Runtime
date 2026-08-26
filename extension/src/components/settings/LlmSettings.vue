@@ -24,7 +24,8 @@ function toForm(cfg: LlmConfig | null): LlmForm {
     provider: cfg?.provider ?? "openai",
     base_url: cfg?.base_url ?? "",
     model: cfg?.model ?? "",
-    api_key: "",
+    // 方案 A：从本地真源还原明文 key（后端只回掩码），满足「上次一模一样」
+    api_key: store.llmKeyPlain ?? "",
     temperature: cfg?.temperature ?? 0.7,
   }
 }
@@ -32,9 +33,9 @@ function toForm(cfg: LlmConfig | null): LlmForm {
 const form = ref<LlmForm>(toForm(store.llm))
 // store 数据到达/保存回写时同步表单（面板在 loadAll 完成后才挂载，此处兜底）
 watch(
-  () => store.llm,
+  () => [store.llm, store.llmKeyPlain] as const,
   (v) => {
-    if (v) form.value = toForm(v)
+    if (v[0]) form.value = toForm(v[0])
   },
 )
 
@@ -45,7 +46,7 @@ const dirty = computed(
       form.value.base_url !== (store.llm!.base_url ?? "") ||
       form.value.model !== store.llm!.model ||
       form.value.temperature !== store.llm!.temperature ||
-      form.value.api_key.length > 0),
+      form.value.api_key !== (store.llmKeyPlain ?? "")),
 )
 
 const PROVIDER_OPTIONS = [

@@ -21,6 +21,10 @@ export const useConnectionStore = defineStore("connection", () => {
       await apiGet<{ status: string }>("/health")
       state.value = "connected"
       lastHeartbeat.value = new Date().toLocaleTimeString()
+      // 方案 A：建连即补推活动配置到注册表（后端进程重启后注册表为空，靠此重推）。
+      // 运行时引用 settings store，避免顶层循环依赖。
+      const { useSettingsStore } = await import("./settings")
+      await useSettingsStore().pushActive()
     } catch {
       state.value = "disconnected"
     }
