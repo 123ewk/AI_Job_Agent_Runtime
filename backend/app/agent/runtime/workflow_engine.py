@@ -414,10 +414,15 @@ async def create_planner_from_settings(
     运行期职责分离；未配置完整时抛 PlannerConfigError 由调用方引导用户
     （不静默降级——没有 LLM 的 planner 只会把所有任务导向 failed）。
     """
+    from app.core.active_config_registry import get_active_config
     from app.service.setting import SettingsService
 
-    async with session_factory() as session:
-        current = await SettingsService(session).get_llm_runtime_config(user_id)
+    # 方案 A（设置 local-first）：优先读进程内活动配置注册表（含明文 api_key）；
+    # 注册表空（扩展尚未推送 / 进程刚重启）时回退已存 DB 配置，过渡期不回归。
+    current = get_active_config("llm")
+    if not current.get("api_key"):
+        async with session_factory() as session:
+            current = await SettingsService(session).get_llm_runtime_config(user_id)
 
     api_key = current.get("api_key")
     model = current.get("model")

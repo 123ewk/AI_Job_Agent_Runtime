@@ -176,10 +176,14 @@ async def create_fallback_llm_from_settings(
     user_id: int,
 ) -> LangchainFallbackLLM | None:
     """从用户 Settings.llm 组装兜底 LLM；未配置时返回 None（调用方降级）。"""
+    from app.core.active_config_registry import get_active_config
     from app.service.setting import SettingsService
 
-    async with session_factory() as session:
-        current = await SettingsService(session).get_llm_runtime_config(user_id)
+    # 方案 A：优先读进程内活动配置注册表；为空时回退已存 DB 配置（过渡期不回归）。
+    current = get_active_config("llm")
+    if not current.get("api_key"):
+        async with session_factory() as session:
+            current = await SettingsService(session).get_llm_runtime_config(user_id)
 
     api_key = current.get("api_key")
     model = current.get("model")

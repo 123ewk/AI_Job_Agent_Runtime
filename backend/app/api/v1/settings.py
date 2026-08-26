@@ -184,7 +184,12 @@ async def validate_llm_settings(
             provider=data.provider,
         )
     else:
-        current = await service.get_llm_runtime_config(user_id)
+        from app.core.active_config_registry import get_active_config
+
+        # 方案 A：优先读注册表中的活动配置（扩展已推送的明文 key）；为空回退 DB。
+        current = get_active_config("llm")
+        if not current.get("api_key"):
+            current = await service.get_llm_runtime_config(user_id)
         ok, detail = await service.test_llm_connectivity(
             api_key=current.get("api_key"),
             base_url=current.get("base_url"),
