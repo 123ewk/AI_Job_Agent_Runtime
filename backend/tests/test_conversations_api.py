@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import pytest
 from httpx import AsyncClient
 
 BASE = "/api/v1/conversations"
@@ -100,15 +99,21 @@ class TestConversationsAPI:
         assert len(listed.json()) == 1
 
     async def test_sync_messages(self, client: AsyncClient) -> None:
-        """POST /conversations/{id}/sync 占位实现返回 StatusResponse（新增 0 条）。"""
+        """POST /conversations/{id}/sync 功能未实现返回 501 not_implemented（消除静默假成功）。"""
         create = await client.post(BASE, json=_conv_payload("c-sync"))
         conv_id = create.json()["id"]
 
         resp = await client.post(f"{BASE}/{conv_id}/sync")
-        assert resp.status_code == 200
+        assert resp.status_code == 501
         data = resp.json()
-        assert data["status"] == "ok"
-        assert "0" in data["message"]
+        assert data["error"] == "not_implemented"
+
+    async def test_sync_messages_not_found(self, client: AsyncClient) -> None:
+        """POST /conversations/{id}/sync 会话不存在仍返回 404（保留资源校验语义）。"""
+        resp = await client.post(f"{BASE}/99999/sync")
+        assert resp.status_code == 404
+        data = resp.json()
+        assert data["error"] == "not_found"
 
     async def test_unreplied_check_empty(self, client: AsyncClient) -> None:
         """GET /conversations/unreplied/check 返回 {count, messages}。"""

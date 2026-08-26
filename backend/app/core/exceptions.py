@@ -65,3 +65,15 @@ class BadRequestError(AppError):
 
     status_code = 400
     code = "bad_request"
+
+
+class NotImplementedError(AppError):
+    """功能未实现（501）。
+
+    用于占位 stub 功能（如 sync / memory extract）。调用方应明确感知
+    「未实现」，而非收到静默假成功——假成功比明确报错更危险，会让
+    上游调用方误以为功能可用。
+    """
+
+    status_code = 501
+    code = "not_implemented"

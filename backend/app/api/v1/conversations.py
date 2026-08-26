@@ -141,6 +141,7 @@ async def sync_boss_messages(
     """从 Boss 页面同步新消息。
 
     触发 Chrome Skill 拉取页面消息并去重落库。
+    当前功能未实现（依赖同步方案 §8.2 定案），调用即返回 501。
     """
     count = await service.sync_boss_messages(user_id, conversation_id)
     return StatusResponse(status="ok", message=f"同步完成，新增 {count} 条消息")

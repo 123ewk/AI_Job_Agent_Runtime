@@ -17,7 +17,7 @@ from typing import Any
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError, NotImplementedError
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.repository.conversation import ConversationRepository
@@ -293,23 +293,24 @@ class ConversationService(BaseService):
 
         由 Sync 系统调用，返回新增消息数。
         去重：依赖 external_msg_id 唯一约束。
+
+        Raises:
+            NotImplementedError: 真同步依赖「同步方案 §8.2」定案后接入
+                Boss Chat Skill / Chrome 拉取。此前占位返回「新增 0 条」
+                属静默假成功，调用方无法感知未实现，故改为明确抛错（501）。
         """
-        # 校验会话归属
+        # 校验会话归属（保留资源语义：不存在的会话仍返回 404）
         conv = await self.conversation_repo.get_by_unique(id=conversation_id, user_id=user_id)
         if not conv:
             raise NotFoundError(f"会话不存在: {conversation_id}")
 
-        # TODO: 实际调用 Chrome Skill 拉取页面消息
-        # 此处为占位逻辑，真正实现需与 Sync 系统集成
         self.logger.info(
-            "sync_boss_messages_started",
+            "sync_boss_messages_not_implemented",
             extra={"user_id": user_id, "conversation_id": conversation_id},
         )
 
-        # 更新最后同步时间
-        await self.conversation_repo.update(conversation_id, {"last_synced_at": datetime.now(timezone.utc)})
-
-        return 0
+        msg = "从 Boss 页面同步消息功能尚未实现"
+        raise NotImplementedError(msg)
 
     async def _enqueue_reply_task(self, user_id: int, conversation_id: int, message_id: int) -> None:
         """触发生成回复任务。
