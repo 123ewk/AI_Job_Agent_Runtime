@@ -36,7 +36,7 @@
 
 以下全部经全库 grep 确认 **零 import**。分两类处置：
 
-### B1. 职责错位（设计层问题，需用户拍板方向）
+### B1. 职责错位（设计层问题，需用户拍板方向） [x] ✅ 删除留档（2026-08-26，用户拍板）
 - **`app/agent/domain/rules.py`**、**`app/agent/domain/guard.py`**：doc 05 声明它们应持有
   「岗位适配度规则、敏感操作清单（触发 Approval）、域名白名单」「前置/后置校验」。但文件是 TODO 空壳，
   且真实红线（send 需 approved、域名白名单）是**内联在 `SkillExecutor` / `tools/router.py` / 技能服务**里的。
@@ -44,6 +44,11 @@
   1. **收敛**：把内联的红线/白名单收敛进 `domain/`，被 router 引用（大改，动红线段慎行）；
   2. **删除留档**：删这两个空壳 + 在 doc 里注明"规则当前内联在 router/skill，未来属 domain"。
   **推荐先 2 后评估**，避免为凑架构而重排已经跑通的红线。
+
+**✅ 用户拍板「删除留档」（2026-08-26）**：`app/agent/domain/` 整个移除（rules.py / guard.py 纯 docstring
+空壳 + __init__.py docstring 占位，全库**零引用**）。**留档断言**：岗位适配度规则 / 敏感操作清单
+（send 需 approved）/ 域名白名单，当前**内联在 `SkillExecutor` / `tools/router.py` / 技能服务**；未来若需
+领域化，再从内联处抽出到 `app/agent/domain/`，勿在技能内重复实现。
 
 ### B2. 死壳（被别处取代 / backlog，可安全清或留待功能落地） [x] ✅ events/approval_manager 已删（2026-08-26）
 - **`app/agent/runtime/events.py`**：旧 WS 占位，已被 `ws_hub.py` 完全取代 → 应删。**✅ 已删**（纯 4 行 docstring 空壳，全库无 import，git rm）。
