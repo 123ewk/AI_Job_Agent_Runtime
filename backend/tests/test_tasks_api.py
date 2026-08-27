@@ -212,13 +212,37 @@ class TestTasksAPI:
         assert resp.status_code >= 500
 
     async def test_queue_stats(self, client: AsyncClient) -> None:
-        """GET /tasks/queue/stats 返回 pending 计数与并发上限。"""
+        """GET /tasks/queue/stats 返回 pending 计数与并发上限（默认 3）。"""
         await _create_task(client)
         resp = await client.get(f"{BASE}/queue/stats")
         assert resp.status_code == 200
         data = resp.json()
         assert data["pending"] == 1
         assert data["max_concurrent"] == 3
+
+    async def test_queue_stats_max_concurrent_reads_settings(
+        self, client: AsyncClient
+    ) -> None:
+        """max_concurrent 从 SettingsService 读取，改 agent.concurrency_limit 后同步变化。
+
+        回归 D11：原硬编码 3，改为读 agent 配置，确保前后端一致。
+        """
+        # 先改 agent 并发限制为 5
+        resp = await client.put(
+            "/api/v1/settings/agent",
+            json={
+                "concurrency_limit": 5,
+                "auto_reply_enabled": False,
+                "auto_approval_threshold": 0.9,
+                "approval_timeout_seconds": 20,
+                "max_retries": 2,
+            },
+        )
+        assert resp.status_code == 200
+        # 队列统计的 max_concurrent 应同步为 5
+        resp = await client.get(f"{BASE}/queue/stats")
+        assert resp.status_code == 200
+        assert resp.json()["max_concurrent"] == 5
 
     async def test_create_task_with_thread_id(
         self,
@@ -272,6 +296,30 @@ class TestTasksAPI:
 
 class TestApprovalAPI:
     """审批接口契约（路由为 /tasks/{task_id}/approvals/*）。"""
+
+    async def test_get_pending_approval_other_user_task_404(self, client: AsyncClient) -> None:
+        """访问不存在的 task_id 返回 404（不暴露是否存在，防越权枚举）。
+
+        回归 D12：approval 接口先校验任务归属，不属于当前用户的 task_id
+        与不存在的 task_id 表现一致（均 404），防止信息泄露。
+        """
+        resp = await client.get(f"{BASE}/99999/approvals/pending")
+        assert resp.status_code == 404
+
+    async def test_approve_other_user_task_404(self, client: AsyncClient) -> None:
+        """approve 访问不存在 task_id 返回 404（防越权枚举）。"""
+        resp = await client.post(
+            f"{BASE}/99999/approvals/approve",
+            json={"approval_id": 1, "approved": True},
+        )
+        assert resp.status_code == 404
+
+    async def test_deny_other_user_task_404(self, client: AsyncClient) -> None:
+        """deny 访问不存在 task_id 返回 404（防越权枚举）。"""
+        resp = await client.post(
+            f"{BASE}/99999/approvals/deny",
+        )
+        assert resp.status_code == 404
 
     async def test_get_pending_approval_none(self, client: AsyncClient) -> None:
         """新任务无待处理审批，GET 返回 null。"""

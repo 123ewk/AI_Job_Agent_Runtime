@@ -10,7 +10,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import CurrentUserDep, TaskServiceDep
+from app.api.deps import CurrentUserDep, SettingsServiceDep, TaskServiceDep
 from app.core.exceptions import NotFoundError
 from app.core.logging import get_logger
 from app.schema.common import PaginatedResponse, StatusResponse
@@ -125,7 +125,11 @@ async def get_pending_approval(
     """获取任务待处理的审批。
 
     任务执行到需要人工确认的节点时，会产生 pending 状态的 approval。
+    先校验任务归属（防止越权读取他人审批信息）。
     """
+    # 先校验任务归属：不存在或不属于当前用户均抛 404，不暴露 task_id 是否存在
+    await service.get_by_id(user_id, task_id)
+
     from app.repository.approval import ApprovalRepository
 
     approval_repo = ApprovalRepository(service.db)
@@ -151,6 +155,9 @@ async def approve_task(
     注：接口路径名 ``/approve`` 为历史遗留，实际支持双向决策，保持
     与前端契约（``TaskApproveRequest.approved`` 字段）一致。
     """
+    # 先校验任务归属：不存在或不属于当前用户均抛 404，不暴露 task_id 是否存在
+    await service.get_by_id(user_id, task_id)
+
     from app.repository.approval import ApprovalRepository
     from app.service.approval import ApprovalService
 
@@ -179,6 +186,9 @@ async def deny_task(
     拒绝后任务进入 canceled 终态，不会再重试。
     决策结果会写入 approval 记录。
     """
+    # 先校验任务归属：不存在或不属于当前用户均抛 404，不暴露 task_id 是否存在
+    await service.get_by_id(user_id, task_id)
+
     from app.repository.approval import ApprovalRepository
     from app.service.approval import ApprovalService
 
@@ -197,13 +207,17 @@ async def deny_task(
 async def get_queue_stats(
     user_id: CurrentUserDep,
     service: TaskServiceDep,
+    settings_service: SettingsServiceDep,
 ) -> dict:
     """获取任务队列统计。
 
     返回各状态任务数，用于 Dashboard 展示。
+    max_concurrent 从 SettingsService 读取 agent.concurrency_limit，
+    而非硬编码，确保与 Agent 执行器一致。
     """
     pending_count = await service.get_pending_tasks_count(user_id)
+    agent_config = await settings_service.get_agent_config(user_id)
     return {
         "pending": pending_count,
-        "max_concurrent": 3,  # 可从 SettingsService 读取
+        "max_concurrent": agent_config.concurrency_limit,
     }
